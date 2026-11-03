@@ -127,9 +127,6 @@ SMTP_PORT=465
 For Gmail, use an App Password where applicable, not your normal account
 password.
 
-**Never commit `.env` or credentials to GitHub.** Add `.env` to
-`.gitignore`.
-
 ### 5. Configure companies
 
 Edit `companies.json` as a starting point. Add the companies, career
@@ -256,7 +253,7 @@ career-page monitoring.
 
 ``` bash
 python notify.py --discover
-python notify.py --discover "Company Name"
+python notify.py --discover Company_Name
 ```
 
 Discovers the technical information needed to query the selected
@@ -280,7 +277,7 @@ monitoring run: the monitoring engine calls discovery when required.
 
 ``` bash
 python notify.py --discover-ids
-python notify.py --discover-ids "Company Name"
+python notify.py --discover-ids Company_Name
 ```
 
 Runs the same discovery process and displays the discovered platform
@@ -295,7 +292,7 @@ detection or send job-change alerts.
 
 ``` bash
 python notify.py --refresh-discovery
-python notify.py --discover "Company Name" --refresh-discovery
+python notify.py --discover Company_Name --refresh-discovery
 ```
 
 Forces discovery metadata to be fetched again instead of using the
@@ -347,7 +344,7 @@ Useful when testing a newly added company, troubleshooting a career portal, or r
 
 ``` bash
 python notify.py --audit
-python notify.py --audit "Company Name"
+python notify.py --audit Company_Name
 ```
 
 Audits the configured title and description exclusion filters for all
@@ -426,7 +423,7 @@ normal `states/` snapshots.
 
 ``` bash
 python notify.py --probe
-python notify.py --probe "Company Name"
+python notify.py --probe Company_Name
 ```
 
 Fetches live matching results for the selected company or all enabled
@@ -539,10 +536,10 @@ machine. Make sure the cron environment can access the project files and
 
 -   **No email received:** Run `python notify.py --test-email` and
     verify `.env`.
--   **No jobs found:** Run `python notify.py --probe "Company Name"` and
+-   **No jobs found:** Run `python notify.py --probe Company_Name` and
     inspect the configured search criteria.
 -   **Relevant titles may be missing:** Run
-    `python notify.py --audit "Company Name"` and inspect
+    `python notify.py --audit Company_Name` and inspect
     `audit_results.csv`.
 -   **A job was unexpectedly excluded:** Filter the audit CSV by
     company/search and inspect `reason`, `matched_rule`, and
@@ -551,7 +548,7 @@ machine. Make sure the cron environment can access the project files and
     `description_status`. Some portals expose incomplete descriptions,
     and unavailable descriptions are not treated as matches.
 -   **Career portal requests are failing:** Run
-    `python notify.py --discover "Company Name" --refresh-discovery`.
+    `python notify.py --discover Company_Name --refresh-discovery`.
 -   **Unexpected first-run behavior:** Check whether the relevant JSON
     file exists in `states/` and whether the script is using the
     intended state directory.
