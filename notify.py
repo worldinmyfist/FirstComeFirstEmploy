@@ -13,8 +13,9 @@ import sys
 import time
 
 from pathlib import Path
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, parse_qs
 from email.mime.text import MIMEText
+from html import unescape as html_unescape
 
 import requests
 from dotenv import load_dotenv
@@ -396,6 +397,23 @@ def detect_platform(company):
         "google.com" in host and "careers" in path
     ):
         return "google"
+
+    if (
+        host.endswith("oraclecloud.com")
+        and "/hcmui/candidateexperience/" in path
+    ):
+        return "oracle"
+
+    if host.endswith("linkedin.com") and (
+        "/company/" in path
+    ):
+        return "linkedin"
+
+    if (
+        host.endswith("databricks.com")
+        and path.startswith("/company/careers/")
+    ):
+        return "greenhouse"
 
     raise ValueError(
         f"Unsupported career URL: {company['career_url']}"
@@ -1181,7 +1199,8 @@ def fetch_jobs(session, company, metadata, search):
 
 EXTRA_PLATFORMS = (
     "lever", "ashby", "smartrecruiters",
-    "atlassian", "amazon", "eightfold", "google"
+    "atlassian", "amazon", "eightfold", "google", "oracle",
+    "linkedin",
 )
 
 ALL_PLATFORMS = ("workday", "greenhouse") + EXTRA_PLATFORMS
@@ -2057,6 +2076,388 @@ def fetch_google(session, metadata, search):
 
     return jobs, True
 
+def oracle_defaults(company):
+    parsed = urlparse(company["career_url"])
+
+    match = re.search(
+        r"/hcmUI/CandidateExperience/([^/]+)/sites/([^/]+)",
+        parsed.path,
+        re.I
+    )
+
+    if not match:
+        raise ValueError(
+            "Invalid Oracle Candidate Experience URL"
+        )
+
+    language, site = match.groups()
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    return {
+        "oracle_site": company.get("oracle_site", site),
+        "oracle_language": language,
+        "site_base_url": base_url,
+        "api_url": (
+            f"{base_url}/hcmRestApi/resources/latest/"
+            "recruitingCEJobRequisitions"
+        ),
+        "detail_api_url": (
+            f"{base_url}/hcmRestApi/resources/latest/"
+            "recruitingCEJobRequisitionDetails"
+        )
+    }
+
+ORACLE_PAGE_SIZE = 100
+
+
+def fetch_oracle_description(session, metadata, job_id):
+
+    finder = (
+        f'ById;Id="{job_id}",'
+        f'siteNumber={metadata["oracle_site"]}'
+    )
+
+    data = request_json(
+        session,
+        metadata["detail_api_url"],
+        params={
+            "onlyData": "true",
+            "expand": "all",
+            "finder": finder
+        }
+    )
+
+    items = data.get("items") or []
+
+    if not items:
+        return ""
+
+    detail = items[0]
+
+    description_parts = [
+        detail.get("ExternalDescriptionStr"),
+        detail.get("ExternalResponsibilitiesStr"),
+        detail.get("ExternalQualificationsStr"),
+        detail.get("ShortDescriptionStr")
+    ]
+
+    return clean_description(
+        "\n".join(
+            str(part)
+            for part in description_parts
+            if part
+        )
+    )
+
+
+def fetch_oracle(session, metadata, search):
+
+    jobs = {}
+    offset = 0
+    total = None
+
+    audit_mode = bool(search.get("_audit_mode"))
+    need_description = description_filters_requested(search)
+
+    while True:
+
+        finder = (
+            f"findReqs;siteNumber={metadata['oracle_site']},"
+            f"limit={ORACLE_PAGE_SIZE},offset={offset}"
+        )
+
+        data = request_json(
+            session,
+            metadata["api_url"],
+            params={
+                "onlyData": "true",
+                "expand": "requisitionList",
+                "finder": finder
+            }
+        )
+
+        items = data.get("items") or []
+
+        if not items:
+            if offset == 0:
+                raise RuntimeError(
+                    "Oracle returned no requisition results"
+                )
+            break
+
+        block = items[0]
+
+        postings = block.get("requisitionList") or []
+
+        if total is None:
+            total = (
+                block.get("TotalJobsCount")
+                or data.get("totalResults")
+                or 0
+            )
+            print("  Oracle postings:", total)
+
+        if not postings:
+            break
+
+        for posting in postings:
+
+            jid = posting.get("Id")
+
+            if jid is None:
+                continue
+
+            jid = str(jid)
+
+            title = (
+                posting.get("Title") or ""
+            ).strip()
+
+            location = (
+                posting.get("PrimaryLocation") or ""
+            )
+
+            description = clean_description(
+                posting.get("ExternalDescriptionStr")
+                or posting.get("ShortDescriptionStr")
+                or ""
+            )
+
+            # Only fetch individual descriptions when needed.
+            if need_description:
+                try:
+                    description = fetch_oracle_description(
+                        session,
+                        metadata,
+                        jid
+                    )
+                except Exception as exc:
+                    if not audit_mode:
+                        raise RuntimeError(
+                            f"Oracle description unavailable "
+                            f"for {jid}: {exc}"
+                        ) from exc
+
+                    print(
+                        f"  Description unavailable: {jid}"
+                    )
+
+            job_url = (
+                posting.get("ExternalUrlSeo")
+                or posting.get("ExternalUrl")
+                or (
+                    f"{metadata['site_base_url']}/hcmUI/"
+                    f"CandidateExperience/"
+                    f"{metadata['oracle_language']}/"
+                    f"sites/{metadata['oracle_site']}/job/{jid}"
+                )
+            )
+
+            jobs[jid] = {
+                "title": title,
+                "location": location,
+                "url": job_url,
+                "posted": (
+                    posting.get("PostedDate")
+                    or posting.get("ExternalPostedStartDate")
+                    or ""
+                ),
+                "_description": description
+            }
+
+        offset += len(postings)
+
+        if len(postings) < ORACLE_PAGE_SIZE:
+            break
+
+        time.sleep(POLITE_DELAY)
+
+    if total and not jobs:
+        raise RuntimeError(
+            "Oracle reported jobs but no job IDs were parsed"
+        )
+
+    return jobs, False
+
+def fetch_linkedin(session, metadata, search):
+    """
+    Fetch public LinkedIn job listings for one company.
+    Uses LinkedIn's guest jobs endpoint.
+    """
+
+    company_ids = metadata["company_ids"]
+    company_filter = ",".join(str(cid) for cid in company_ids)
+
+    location = (
+        search.get("location")
+        or primary_country(search)
+        or "India"
+    )
+
+    jobs = {}
+    page_size = 25
+
+    for page in range(MAX_PAGES):
+
+        start = page * page_size
+
+        params = {
+            "f_C": company_filter,
+            "location": location,
+            "start": start,
+            "count": page_size,
+        }
+
+        if search.get("search_text"):
+            params["keywords"] = search["search_text"]
+
+        html = request_text(
+            session,
+            metadata["api_url"],
+            params
+        )
+
+        # Split the response into individual job cards.
+        parts = re.split(
+            r'data-entity-urn="urn:li:jobPosting:(\d+)"',
+            html
+        )
+
+        found = 0
+
+        for i in range(1, len(parts), 2):
+
+            jid = parts[i]
+            card = parts[i + 1][:10000]
+
+            if jid in jobs:
+                continue
+
+            def extract(pattern):
+                match = re.search(
+                    pattern,
+                    card,
+                    re.I | re.S
+                )
+
+                if not match:
+                    return ""
+
+                value = re.sub(
+                    r"<[^>]+>",
+                    " ",
+                    match.group(1)
+                )
+
+                return " ".join(
+                    html_unescape(value).split()
+                )
+
+            title = extract(
+                r'class="[^"]*base-search-card__title[^"]*"[^>]*>(.*?)</'
+            )
+
+            job_location = extract(
+                r'class="[^"]*job-search-card__location[^"]*"[^>]*>(.*?)</'
+            )
+
+            url_match = re.search(
+                r'<a[^>]+href="([^"]*linkedin\.com/jobs/view/[^"]+)"',
+                card,
+                re.I
+            )
+
+            job_url = (
+                html_unescape(url_match.group(1))
+                if url_match
+                else f"https://www.linkedin.com/jobs/view/{jid}"
+            )
+
+            if not title:
+                continue
+
+            description = ""
+
+            if False and description_filters_requested(search):
+
+                detail_url = (
+                    "https://www.linkedin.com/"
+                    "jobs-guest/jobs/api/jobPosting/"
+                    f"{jid}"
+                )
+
+                detail_html = request_text(
+                    session,
+                    detail_url
+                )
+
+                description_match = re.search(
+                    r'class="[^"]*show-more-less-html__markup[^"]*"'
+                    r'[^>]*>(.*?)</div>',
+                    detail_html,
+                    re.I | re.S
+                )
+
+                if description_match:
+                    description = clean_description(
+                        description_match.group(1)
+                    )
+
+            jobs[jid] = {
+                "title": title,
+                "location": job_location,
+                "url": job_url,
+                "posted": "",
+                "_description": description,
+            }
+
+            found += 1
+
+        print(
+            f"LinkedIn page {page + 1}: "
+            f"{found} new jobs"
+        )
+
+        if found == 0:
+            break
+
+        time.sleep(POLITE_DELAY)
+
+    return jobs, False
+
+def extract_linkedin_company_ids(url):
+    """Extract LinkedIn company IDs from the f_C URL parameter."""
+    params = parse_qs(urlparse(url).query)
+    raw_ids = params.get("f_C", [])
+
+    if not raw_ids:
+        return []
+
+    return [
+        company_id.strip()
+        for company_id in raw_ids[0].split(",")
+        if company_id.strip().isdigit()
+    ]
+
+def discover_linkedin_company_id(session, career_url):
+    html = request_text(session, career_url)
+
+    patterns = [
+        r"urn:li:fsd_company:(\d+)",
+        r'"companyId"\s*:\s*"?(\d+)"?',
+        r'"entityUrn"\s*:\s*"urn:li:fsd_company:(\d+)"'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, html)
+
+        if match:
+            return match.group(1)
+
+    raise RuntimeError(
+        "Could not extract LinkedIn company ID. "
+        "Add linkedin_company_id manually to companies.json."
+    )
 
 # ------------------------------------------------------------
 # Discovery + dispatch for the new platforms
@@ -2100,6 +2501,31 @@ def discover_simple(session, company, platform):
 
     elif platform == "google":
         meta["api_url"] = GOOGLE_RESULTS_URL
+
+    elif platform == "oracle":
+        meta.update(oracle_defaults(company))
+
+    elif platform == "linkedin":
+        company_ids = (
+            company.get("linkedin_company_ids")
+            or extract_linkedin_company_ids(company["career_url"])
+        )
+
+        if isinstance(company_ids, str):
+            company_ids = [company_ids]
+
+        if not company_ids:
+            raise RuntimeError(
+                "Could not extract LinkedIn company IDs. "
+                "Add linkedin_company_ids to companies.json."
+            )
+
+        meta["company_ids"] = company_ids
+
+        meta["api_url"] = (
+            "https://www.linkedin.com/jobs-guest/"
+            "jobs/api/seeMoreJobPostings/search"
+        )
 
     # Validate the board right away for platforms whose
     # listing does not depend on the search filters.
@@ -2150,6 +2576,33 @@ def load_raw(session, company, metadata, search):
             description_filters_requested(search)
         )
         fetcher = lambda: fetch_google(session, metadata, search)
+
+    elif platform == "oracle":
+        key = (
+            platform,
+            metadata["api_url"],
+            metadata["oracle_site"],
+            description_filters_requested(search)
+        )
+
+        fetcher = lambda: fetch_oracle(
+            session, metadata, search
+        )
+
+    elif platform == "linkedin":
+        key = (
+            platform,
+            tuple(metadata["company_ids"]),
+            search.get("location") or primary_country(search),
+            search.get("search_text", ""),
+            description_filters_requested(search),
+        )
+
+        fetcher = lambda: fetch_linkedin(
+            session,
+            metadata,
+            search
+        )
 
     else:
         key = (platform, metadata["api_url"])
@@ -2806,67 +3259,54 @@ def count_changes(changes):
 # ============================================================
 
 def build_email(all_changes):
-    body = "JOB NOTIFY UPDATE\n"
-    body += "=" * 70 + "\n"
+    body = """
+    <html>
+    <body>
+    <h2>JOB NOTIFY UPDATE</h2>
+    <hr>
+    """
 
     for name, changes in all_changes.items():
-
-        body += (
-            f"\nMONITOR: {name}\n"
-            + "=" * 70
-            + "\n"
-        )
+        body += f"<h2>MONITOR: {name}</h2>"
 
         if changes["added"]:
-
-            body += (
-                f"\nNEW JOBS ({len(changes['added'])})\n"
-            )
+            body += f"<h3>NEW JOBS ({len(changes['added'])})</h3>"
 
             for jid, job in changes["added"].items():
-
                 body += (
-                    f"\n{job['title']}\n"
-                    f"Location: {job.get('location', '')}\n"
-                    f"ID: {jid}\n"
-                    f"Posted: {job.get('posted', '')}\n"
-                    f"URL: {job['url']}\n"
+                    f"<p><b>{job['title']}</b><br>"
+                    f"Location: {job.get('location', '')}<br>"
+                    f"ID: {jid}<br>"
+                    f"Posted: {job.get('posted', '')}<br>"
+                    f'<a href="{job["url"]}">View Job</a></p>'
                 )
 
         if changes["removed"]:
-
-            body += (
-                f"\nREMOVED JOBS ({len(changes['removed'])})\n"
-            )
+            body += f"<h3>REMOVED JOBS ({len(changes['removed'])})</h3>"
 
             for jid, job in changes["removed"].items():
-
                 body += (
-                    f"\n{job['title']}\n"
-                    f"Location: {job.get('location', '')}\n"
-                    f"ID: {jid}\n"
+                    f"<p><b>{job['title']}</b><br>"
+                    f"Location: {job.get('location', '')}<br>"
+                    f"ID: {jid}</p>"
                 )
 
         if changes["modified"]:
-
-            body += (
-                f"\nMODIFIED JOBS ({len(changes['modified'])})\n"
-            )
+            body += f"<h3>MODIFIED JOBS ({len(changes['modified'])})</h3>"
 
             for jid, details in changes["modified"].items():
-
                 old = details["old"]
                 new = details["new"]
 
                 body += (
-                    f"\nID: {jid}\n"
-                    f"Old: {old['title']} | "
-                    f"{old.get('location', '')}\n"
-                    f"New: {new['title']} | "
-                    f"{new.get('location', '')}\n"
-                    f"URL: {new['url']}\n"
+                    f"<p><b>{new['title']}</b><br>"
+                    f"ID: {jid}<br>"
+                    f"Old: {old['title']} | {old.get('location', '')}<br>"
+                    f"New: {new['title']} | {new.get('location', '')}<br>"
+                    f'<a href="{new["url"]}">View Job</a></p>'
                 )
 
+    body += "</body></html>"
     return body
 
 
@@ -2890,7 +3330,7 @@ def send_email(all_changes):
         for changes in all_changes.values()
     )
 
-    message = MIMEText(build_email(all_changes))
+    message = MIMEText(build_email(all_changes), "html")
 
     message["Subject"] = (
         f"[JobNotify] {total} changes detected "
@@ -2920,15 +3360,39 @@ def send_test_email():
     test_changes = {
         "SMTP TEST": {
             "added": {
-                "TEST": {
-                    "title": "JobNotify SMTP test",
-                    "location": "Test",
-                    "url": "https://example.com",
-                    "posted": ""
+                "TEST001": {
+                    "title": "Software Engineer - Backend",
+                    "location": "Bangalore, India",
+                    "url": "https://example.com/job/1",
+                    "posted": "Today"
+                },
+                "TEST002": {
+                    "title": "Machine Learning Engineer",
+                    "location": "Remote, India",
+                    "url": "https://example.com/job/2",
+                    "posted": "Yesterday"
                 }
             },
-            "removed": {},
-            "modified": {}
+            "removed": {
+                "TEST003": {
+                    "title": "Quantitative Researcher",
+                    "location": "Mumbai, India",
+                    "url": "https://example.com/job/3"
+                }
+            },
+            "modified": {
+                "TEST004": {
+                    "old": {
+                        "title": "Software Engineer",
+                        "location": "Hyderabad"
+                    },
+                    "new": {
+                        "title": "Senior Software Engineer",
+                        "location": "Bangalore",
+                        "url": "https://example.com/job/4"
+                    }
+                }
+            }
         }
     }
 
