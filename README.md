@@ -1,9 +1,9 @@
-# JobNotify
+# FirstComeFirstEmploy
 
 **Automated job monitoring and email alerts across company career
 portals.**
 
-JobNotify checks configured company career pages, applies your search
+FirstComeFirstEmploy checks configured company career pages, applies your search
 and filtering rules, compares current results with previously saved
 snapshots, and emails you when tracked jobs are added, removed, or
 modified.
@@ -55,7 +55,7 @@ jobs are saved but are not reported as newly added on that first run.
 ## Repository layout
 
 ``` text
-JobNotify/
+FirstComeFirstEmploy/
 ├── notify.py
 ├── companies.json
 ├── requirements.txt
@@ -94,8 +94,8 @@ JobNotify/
 ### 1. Clone the repository
 
 ``` bash
-git clone https://github.com/worldinmyfist/JobNotify.git
-cd JobNotify
+git clone https://github.com/worldinmyfist/FirstComeFirstEmploy.git
+cd FirstComeFirstEmploy
 ```
 
 ### 2. Create and activate a virtual environment
@@ -139,7 +139,7 @@ private; publish only anonymised examples.
 
 ## Filtering jobs
 
-JobNotify applies multiple layers of filtering. These are configured
+FirstComeFirstEmploy applies multiple layers of filtering. These are configured
 separately for each search in `companies.json`.
 
 ### Title filters
@@ -189,7 +189,7 @@ descriptions.
 
 Searches can be configured with country and location constraints. Some
 platforms expose these filters directly through their APIs; others
-require JobNotify to evaluate the returned job location.
+require FirstComeFirstEmploy to evaluate the returned job location.
 
 Amazon Jobs uses country-specific career-site selection based on the
 configured search/company settings. Check the relevant company
@@ -245,7 +245,7 @@ which companies are present and enabled before running monitoring.
 python notify.py --test-email
 ```
 
-Sends a sample JobNotify email through the configured SMTP settings. Use
+Sends a sample FirstComeFirstEmploy email through the configured SMTP settings. Use
 it to verify `.env` credentials and email delivery independently of
 career-page monitoring.
 
@@ -303,7 +303,7 @@ change its career-page URL, Workday tenant/site, board token, API
 endpoint, or available filter facets. Cached metadata can then become
 stale and cause requests to fail or return incomplete results.
 
-JobNotify considers discovery metadata fresh for **7 days**. If the
+FirstComeFirstEmploy considers discovery metadata fresh for **7 days**. If the
 cache is missing, older than that, has an incompatible schema, or no
 longer matches the configured career URL/platform, discovery is
 performed again automatically. `--refresh-discovery` bypasses that
@@ -336,7 +336,7 @@ Runs monitoring only for the specified company instead of all enabled companies.
 - Company names are matched case-insensitively.
 - Only the selected company's configured searches are processed.
 - `--dry-run` can be combined with `--company` to preview results without sending emails or saving state snapshots.
-- Without `--company`, JobNotify monitors all enabled companies as usual.
+- Without `--company`, FirstComeFirstEmploy monitors all enabled companies as usual.
 
 Useful when testing a newly added company, troubleshooting a career portal, or running a targeted monitoring check.
 
@@ -469,7 +469,7 @@ Review generated company entries before relying on them for monitoring.
 
 ### `discovery/` --- how to access a career portal
 
-Contains cached technical metadata that helps JobNotify communicate with
+Contains cached technical metadata that helps FirstComeFirstEmploy communicate with
 a company's career portal. Examples include platform identifiers,
 tenant/site information, board tokens, API endpoints, and available
 facets.
@@ -481,11 +481,11 @@ or stale.
 ### `states/` --- what jobs were seen last time
 
 Contains the latest JSON snapshot for each company/search combination.
-JobNotify compares the current results with these snapshots to detect
+FirstComeFirstEmploy compares the current results with these snapshots to detect
 changes.
 
 These files are the monitoring baseline. If they are deleted, moved, or
-replaced with an old copy, JobNotify may treat the next run as a first
+replaced with an old copy, FirstComeFirstEmploy may treat the next run as a first
 run and establish a new baseline rather than detecting changes against
 the previous run.
 
@@ -496,14 +496,14 @@ ever seen.
 
 The `states/` directory can be synced to Google Drive so another person
 can inspect or download the latest JSON snapshots without running
-JobNotify.
+FirstComeFirstEmploy.
 
 Suggested approach:
 
-1.  Create a folder in Google Drive, for example `JobNotify-States`.
+1.  Create a folder in Google Drive, for example `FirstComeFirstEmploy-States`.
 2.  Use Google Drive for Desktop to make that folder available locally,
     or configure the local `states/` directory to sync to Drive.
-3.  Ensure JobNotify's `STATE_DIR` points to the directory that is
+3.  Ensure FirstComeFirstEmploy's `STATE_DIR` points to the directory that is
     actually synced.
 4.  Share the Drive folder with the intended person. Viewer access is
     sufficient if they only need to inspect the JSON files.
@@ -513,19 +513,19 @@ Suggested approach:
 -   Share/sync only `states/` if the other person only needs the job
     snapshots.
 -   Do not share `.env` or email credentials.
--   Avoid having two independent JobNotify processes write to the same
+-   Avoid having two independent FirstComeFirstEmploy processes write to the same
     state files at the same time.
 -   If the other person only needs to view results, they do not need to
     run the script or have access to the rest of the repository.
 
 ## Scheduling automatic checks
 
-On macOS or Linux, use `cron` to run JobNotify on a schedule. For
+On macOS or Linux, use `cron` to run FirstComeFirstEmploy on a schedule. For
 example, twice daily at 11:30 AM and 9:30 PM:
 
 ``` cron
-30 11 * * * /absolute/path/to/JobNotify/.venv/bin/python /absolute/path/to/JobNotify/notify.py >> /absolute/path/to/JobNotify/cron.log 2>&1
-30 21 * * * /absolute/path/to/JobNotify/.venv/bin/python /absolute/path/to/JobNotify/notify.py >> /absolute/path/to/JobNotify/cron.log 2>&1
+30 11 * * * /absolute/path/to/FirstComeFirstEmploy/.venv/bin/python /absolute/path/to/FirstComeFirstEmploy/notify.py >> /absolute/path/to/FirstComeFirstEmploy/cron.log 2>&1
+30 21 * * * /absolute/path/to/FirstComeFirstEmploy/.venv/bin/python /absolute/path/to/FirstComeFirstEmploy/notify.py >> /absolute/path/to/FirstComeFirstEmploy/cron.log 2>&1
 ```
 
 Replace the example paths with the actual absolute paths on your
@@ -557,14 +557,14 @@ machine. Make sure the cron environment can access the project files and
 
 ## Limitations
 
--   JobNotify relies on public career-page endpoints and page
+-   FirstComeFirstEmploy relies on public career-page endpoints and page
     structures. Companies can change these without notice.
 -   Platform support and the amount of job information available vary by
     career portal.
 -   Some portals may provide incomplete posting dates, location details,
     or job descriptions.
 -   Description-based exclusions can only evaluate the description text
-    that JobNotify successfully retrieves.
+    that FirstComeFirstEmploy successfully retrieves.
 -   A job disappearing from the returned results is treated as removed
     from that monitor's results; it does not prove that the employer has
     permanently closed the position.
