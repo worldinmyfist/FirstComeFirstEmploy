@@ -36,7 +36,6 @@ The first successful run for a search creates its baseline. Existing jobs are sa
 JobNotify/
 ├── notify.py
 ├── companies.json
-├── companies.example.json
 ├── requirements.txt
 ├── .env                  # local only; do not commit
 ├── states/               # local state snapshots; optionally sync via Drive
@@ -48,7 +47,6 @@ JobNotify/
 |---|---|
 | `notify.py` | Monitoring engine and command-line utilities. |
 | `companies.json` | Your private/local monitoring configuration. |
-| `companies.example.json` | Sanitized example configuration for this repository. |
 | `.env` | Email and SMTP credentials. Keep this private. |
 | `states/` | Latest job snapshot for each company/search monitor. |
 | `discovery/` | Cached platform metadata used to query career portals. |
@@ -94,9 +92,7 @@ For Gmail, use an App Password where applicable, not your normal account passwor
 
 ### 5. Configure companies
 
-Create `companies.json` using `companies.example.json` as a starting point. Add the companies, career URLs, platform details (where needed), and search filters you want to monitor.
-
-The example file is intended to demonstrate the configuration format. Check the actual script and example configuration for the exact fields supported by each platform and search type.
+Edit `companies.json` as a starting point. Add the companies, career URLs, platform details (where needed), and search filters you want to monitor.
 
 ## Command-line reference
 
@@ -312,32 +308,6 @@ Replace the example paths with the actual absolute paths on your machine. Make s
 - **Unexpected first-run behavior:** check whether the relevant JSON file exists in `states/` and whether the script is using the intended state directory.
 - **Need to inspect configured companies:** run `python notify.py --list-companies`.
 
-## Security and repository hygiene
-
-Do not commit private credentials, local state snapshots, discovery caches, generated audit reports, logs, or personal company configurations unless you deliberately intend to publish them.
-
-A reasonable `.gitignore` starter:
-
-```gitignore
-.env
-.venv/
-__pycache__/
-*.py[cod]
-
-states/
-discovery/
-cron.log
-*.log
-
-audit_*.txt
-companies.json
-companies.json.bak
-companies.generated.json
-companies.unresolved.csv
-```
-
-Keep `companies.example.json` in the repository as the sanitized sample configuration.
-
 ## Limitations
 
 - JobNotify relies on public career-page endpoints and page structures. Companies can change these without notice.
@@ -346,6 +316,3 @@ Keep `companies.example.json` in the repository as the sanitized sample configur
 - Search filters determine what is tracked. Review them periodically, especially after changing title inclusion/exclusion rules.
 - The first run establishes a baseline and does not generate an alert for all existing postings.
 
-## License
-
-Add a `LICENSE` file if you want to specify the terms under which others may use, modify, or distribute this project.
