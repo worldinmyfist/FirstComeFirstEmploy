@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import csv
 import json
+import html as html_lib
 import os
 import re
 import smtplib
@@ -102,6 +105,65 @@ def normalize(value):
         str(value or "").lower()
     ).strip()
 
+
+
+def clean_description(value):
+    """Convert an HTML/plain-text description into searchable text."""
+    if not value:
+        return ""
+    value = str(value)
+    value = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", value)
+    value = re.sub(r"(?s)<[^>]+>", " ", value)
+    value = html_lib.unescape(value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def description_filters_requested(search):
+    return (
+        bool(search.get("description_exclude"))
+        or bool(search.get("_audit_mode"))
+    )
+
+
+def extract_page_description(session, url):
+    """Best-effort description extraction from a public job-detail page."""
+    if not url:
+        return ""
+    try:
+        page = request_text(session, url)
+    except Exception as exc:
+        print(f"  Could not fetch job detail page: {exc}")
+        return ""
+
+    # Prefer JSON-LD JobPosting.description where the site exposes it.
+    for match in re.finditer(
+        r"(?is)<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
+        page
+    ):
+        raw = html_lib.unescape(match.group(1)).strip()
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        objects = payload if isinstance(payload, list) else [payload]
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            graph = obj.get("@graph") or []
+            candidates = [obj] + [x for x in graph if isinstance(x, dict)]
+            for candidate in candidates:
+                kind = candidate.get("@type", [])
+                if isinstance(kind, str):
+                    kind = [kind]
+                if "JobPosting" in kind and candidate.get("description"):
+                    return clean_description(candidate["description"])
+
+    # Fall back to meta description only; do not mistake arbitrary page text for a JD.
+    meta = re.search(
+        r"(?is)<meta[^>]+(?:name|property)=[\"'](?:description|og:description)[\"'][^>]+content=[\"'](.*?)[\"']",
+        page
+    )
+    return clean_description(meta.group(1)) if meta else ""
 
 def safe_filename(value):
     return re.sub(
@@ -735,6 +797,37 @@ def workday_facets(metadata, search):
 # WORKDAY JOB FETCH
 # ============================================================
 
+def fetch_workday_description(session, metadata, external_path):
+    """
+    Fetch the full description for an individual Workday job.
+    """
+    if not external_path:
+        return ""
+
+    api_url = metadata["api_url"].rstrip("/")
+
+    # Convert the listing endpoint (.../jobs) to the CXS base.
+    cxs_base = re.sub(r"/jobs$", "", api_url)
+
+    path = external_path.lstrip("/")
+    if not path.startswith("job/"):
+        return ""
+
+    detail_url = f"{cxs_base}/{path}"
+
+    try:
+        response = session.get(detail_url, timeout=20)
+        response.raise_for_status()
+
+        data = response.json()
+        posting_info = data.get("jobPostingInfo") or {}
+
+        return posting_info.get("jobDescription", "") or ""
+
+    except Exception as e:
+        print(f"  Could not fetch Workday description: {e}")
+        return ""
+
 def fetch_workday(session, metadata, search):
     jobs = {}
     offset = 0
@@ -791,21 +884,21 @@ def fetch_workday(session, metadata, search):
             if not jid:
                 continue
 
+            description = fetch_workday_description(
+                session,
+                metadata,
+                external
+            )
+
             jobs[jid] = {
-                "title": (
-                    posting.get("title") or ""
-                ).strip(),
-
-                "location": posting.get(
-                    "locationsText", ""
-                ),
-
+                "title": (posting.get("title") or "").strip(),
+                "location": posting.get("locationsText", ""),
                 "url": urljoin(
                     metadata["job_base_url"] + "/",
                     external.lstrip("/")
                 ),
-
-                "posted": posting.get("postedOn", "")
+                "posted": posting.get("postedOn", ""),
+                "_description": description
             }
 
         offset += len(postings)
@@ -923,19 +1016,16 @@ def matches_search(title, description, search):
 # GREENHOUSE JOB FETCH
 # ============================================================
 
+
 def fetch_greenhouse(session, metadata, search):
     data = request_json(
         session,
         metadata["api_url"],
-        params={
-            "content": (
-                "true" if search.get("search_text")
-                else "false"
-            )
-        }
+        params={"content": "true"}
     )
 
     jobs = {}
+    audit_mode = bool(search.get("_audit_mode"))
 
     for posting in data.get("jobs", []):
 
@@ -945,7 +1035,9 @@ def fetch_greenhouse(session, metadata, search):
             posting.get("location") or {}
         ).get("name", "")
 
-        description = posting.get("content", "")
+        description = clean_description(
+            posting.get("content", "")
+        )
 
         if not matches_country(
             location,
@@ -960,8 +1052,11 @@ def fetch_greenhouse(session, metadata, search):
         ):
             continue
 
-        if not matches_description_filters(
-            description, search
+        if (
+            not audit_mode
+            and not matches_description_filters(
+                description, search
+            )
         ):
             continue
 
@@ -970,14 +1065,20 @@ def fetch_greenhouse(session, metadata, search):
         if jid == "None":
             continue
 
-        jobs[jid] = {
+        job = {
             "title": title,
             "location": location,
             "url": posting.get("absolute_url", ""),
             "posted": posting.get("updated_at", "")
         }
 
+        if audit_mode:
+            job["_description"] = description
+
+        jobs[jid] = job
+
     return jobs
+
 
 
 # ============================================================
@@ -1045,10 +1146,11 @@ TITLE_PRESETS = {
             "applied scientist", "research scientist",
             "research engineer", "data scientist",
             "forward deployed", "fde",
-            "member of technical staff",
-            "quantitative", "quant"
+            "member of technical staff", "member technical staff",
+            "quantitative", "quant", "member technical", "mts", "software engineering", "mle", "data scientist",
+            "sr engineer", "backend", "engineer", "computer scientist"
         ],
-        "exclude": ["intern", "internship", "apprentice", "staff", "principal", "phd"]
+        "exclude": ["intern", "internship", "apprentice", "staff", "principal", "architect", "phd", "fixed term contract", "manager", "lead", "qa", "testing", "test", "verification", "asic", "fpga", "management", "validation", "design engineer", "solutions engineer", "hardware engineer", "modelling engineer", "devops engineer", "system engineer", "systems engineer", "thermal engineer", "dft engineer", "support engineer"]
     }
 }
 
@@ -1066,6 +1168,32 @@ AMAZON_COUNTRY_CODES = {
 }
 
 _RAW_CACHE = {}
+_RAW_CACHE_LOCK = threading.Lock()
+
+def amazon_location_matches_country(location, country):
+    if not country:
+        return True
+
+    location = (location or "").strip()
+    if not location:
+        return False
+
+    country = country.strip()
+    country_code = AMAZON_COUNTRY_CODES.get(country.lower())
+
+    terms = [country]
+
+    if country_code:
+        terms.append(country_code)
+
+    return any(
+        re.search(
+            rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])",
+            location,
+            re.IGNORECASE
+        )
+        for term in terms
+    )
 
 
 def request_text(session, url, params=None):
@@ -1190,6 +1318,41 @@ def matches_title_filters(title, search):
 
     return True
 
+
+def get_title_filter_reasons(title, search):
+    any_terms, exclude_terms = title_terms(search)
+    padded = f" {normalize(title)} "
+
+    reasons = []
+    matched_rules = []
+
+    matched_any = [
+        term for term in any_terms
+        if f" {normalize(term)} " in padded
+    ]
+
+    if any_terms and not matched_any:
+        reasons.append("title_any_no_match")
+        matched_rules.append(
+            "Required title terms: "
+            + "; ".join(any_terms)
+        )
+
+    matched_excludes = [
+        term for term in exclude_terms
+        if f" {normalize(term)} " in padded
+    ]
+
+    if matched_excludes:
+        reasons.append("title_exclude_match")
+        matched_rules.append(
+            "Excluded title terms: "
+            + "; ".join(matched_excludes)
+        )
+
+    return reasons, matched_rules
+
+
 def matches_description_filters(description, search):
     text = normalize(description)
 
@@ -1202,12 +1365,38 @@ def matches_description_filters(description, search):
     return True
 
 
+def get_description_filter_matches(description, search):
+    """
+    Return all description exclusion terms found.
+    Missing descriptions are not treated as rejection.
+    """
+    description = clean_description(description)
+
+    if not description.strip():
+        return [], "unavailable"
+
+    text = normalize(description)
+
+    matched = [
+        term
+        for term in search.get("description_exclude", [])
+        if normalize(term)
+        and normalize(term) in text
+    ]
+
+    return matched, "available"
+
+
+
 def finalize(raw_jobs, search, server_country=False):
     jobs = {}
+    audit_mode = bool(search.get("_audit_mode"))
 
     for jid, job in raw_jobs.items():
 
-        description = job.get("_description", "")
+        description = clean_description(
+            job.get("_description", "")
+        )
 
         if not server_country and not matches_country(
             job.get("location", ""),
@@ -1221,19 +1410,34 @@ def finalize(raw_jobs, search, server_country=False):
             continue
 
         if not matches_search(
-            job.get("title", ""), description, search
-        ):
-            continue
-        
-        if not matches_description_filters(
-            description, search
+            job.get("title", ""),
+            description,
+            search
         ):
             continue
 
-        jobs[jid] = {
-            k: v for k, v in job.items()
-            if k != "_description"
-        }
+        # Normal monitoring: apply description exclusions.
+        # Audit mode: retain the job so run_audit can
+        # independently report the exclusion reason.
+        if (
+            not audit_mode
+            and description.strip()
+            and not matches_description_filters(
+                description, search
+            )
+        ):
+            continue
+
+        if audit_mode:
+            jobs[jid] = {
+                **job,
+                "_description": description
+            }
+        else:
+            jobs[jid] = {
+                k: v for k, v in job.items()
+                if k != "_description"
+            }
 
     return jobs
 
@@ -1332,7 +1536,7 @@ def fetch_ashby(session, metadata):
 # SmartRecruiters
 # ------------------------------------------------------------
 
-def fetch_smartrecruiters(session, metadata):
+def fetch_smartrecruiters(session, metadata, search):
     slug = metadata["slug"]
     jobs = {}
     offset = 0
@@ -1369,14 +1573,45 @@ def fetch_smartrecruiters(session, metadata):
                 ) if x
             )
 
+            job_url = (
+                f"https://jobs.smartrecruiters.com/{slug}/{jid}"
+            )
+            description = ""
+
+            # The public SmartRecruiters Posting API exposes full job-ad
+            # sections on the individual posting endpoint. Fetch only when
+            # description exclusions are configured.
+            if description_filters_requested(search):
+                detail_url = metadata["api_url"].rstrip("/") + f"/{jid}"
+                try:
+                    detail = request_json(session, detail_url)
+                    job_ad = detail.get("jobAd") or {}
+                    sections = job_ad.get("sections") or {}
+                    if isinstance(sections, dict):
+                        description = "\n".join(
+                            str(section.get("text") or "")
+                            for section in sections.values()
+                            if isinstance(section, dict)
+                        )
+                    elif isinstance(sections, list):
+                        description = "\n".join(
+                            str(section.get("text") or "")
+                            for section in sections
+                            if isinstance(section, dict)
+                        )
+                    description = clean_description(description)
+                except Exception as exc:
+                    print(
+                        f"  Could not fetch SmartRecruiters description "
+                        f"for {jid}: {exc}"
+                    )
+
             jobs[str(jid)] = {
                 "title": (p.get("name") or "").strip(),
                 "location": location,
-                "url": (
-                    f"https://jobs.smartrecruiters.com/"
-                    f"{slug}/{jid}"
-                ),
-                "posted": p.get("releasedDate", "")
+                "url": job_url,
+                "posted": p.get("releasedDate", ""),
+                "_description": description
             }
 
         offset += len(content)
@@ -1421,7 +1656,12 @@ def fetch_atlassian(session, metadata):
                     "updatedDate"
                 )
             ),
-            "_description": p.get("overview", "")
+            "_description": clean_description(
+                p.get("overview")
+                or p.get("description")
+                or p.get("jobDescription")
+                or ""
+            )
         }
 
     return jobs
@@ -1432,10 +1672,10 @@ def fetch_atlassian(session, metadata):
 # ------------------------------------------------------------
 
 def fetch_amazon(session, metadata, search):
-    country = primary_country(search)
+    country = (primary_country(search) or "").strip()
     code = (
         search.get("amazon_country")
-        or AMAZON_COUNTRY_CODES.get(country, "")
+        or AMAZON_COUNTRY_CODES.get(country.lower(), "")
     )
 
     params = {
@@ -1469,20 +1709,40 @@ def fetch_amazon(session, metadata, search):
             if not jid:
                 continue
 
+            job_location = (
+                p.get("normalized_location")
+                or p.get("location", "")
+            ).strip()
+
+            if not amazon_location_matches_country(job_location, country):
+                continue
+
+            job_url = urljoin(
+                "https://www.amazon.jobs", p.get("job_path", "")
+            )
+            description = (
+                p.get("description")
+                or p.get("job_description")
+                or p.get("description_short")
+                or ""
+            )
+            if (
+                description_filters_requested(search)
+                and not p.get("description")
+                and not p.get("job_description")
+            ):
+                page_description = extract_page_description(
+                    session, job_url
+                )
+                if page_description:
+                    description = page_description
+
             jobs[str(jid)] = {
                 "title": (p.get("title") or "").strip(),
-                "location": (
-                    p.get("normalized_location")
-                    or p.get("location", "")
-                ),
-                "url": urljoin(
-                    "https://www.amazon.jobs",
-                    p.get("job_path", "")
-                ),
+                "location": job_location,
+                "url": job_url,
                 "posted": p.get("posted_date", ""),
-                "_description": p.get(
-                    "description_short", ""
-                )
+                "_description": clean_description(description)
             }
 
         offset += len(batch)
@@ -1531,6 +1791,8 @@ def fetch_eightfold(session, metadata, search):
     jobs = {}
     start = 0
 
+    fetch_descriptions = description_filters_requested(search)
+
     for _ in range(MAX_PAGES):
 
         params = {
@@ -1572,6 +1834,55 @@ def fetch_eightfold(session, metadata, search):
                 or f"/careers/job/{jid}"
             )
 
+            description = clean_description(
+                p.get("jobDescription")
+                or p.get("description")
+                or p.get("descriptionText")
+                or p.get("job_description")
+                or ""
+            )
+
+            # Eightfold listing results often do not contain
+            # the full job description. Fetch it separately.
+            if fetch_descriptions and not description:
+
+                detail_url = (
+                    metadata["site_base"].rstrip("/")
+                    + "/api/pcsx/position_details"
+                )
+
+                try:
+                    detail = request_json(
+                        session,
+                        detail_url,
+                        params={
+                            "domain": metadata["domain"],
+                            "position_id": jid
+                        }
+                    )
+
+                    detail_data = (
+                        detail.get("data")
+                        if isinstance(detail.get("data"), dict)
+                        else detail
+                    )
+
+                    description = clean_description(
+                        detail_data.get("jobDescription")
+                        or detail_data.get("job_description")
+                        or detail_data.get("description")
+                        or detail_data.get("descriptionText")
+                        or ""
+                    )
+
+                    time.sleep(POLITE_DELAY)
+
+                except Exception as exc:
+                    print(
+                        f"  Eightfold description unavailable "
+                        f"for {jid}: {exc}"
+                    )
+
             jobs[str(jid)] = {
                 "title": (
                     p.get("name") or p.get("title") or ""
@@ -1586,7 +1897,8 @@ def fetch_eightfold(session, metadata, search):
                     p.get("postedTs")
                     or p.get("t_create")
                     or p.get("creationTs")
-                )
+                ),
+                "_description": description
             }
 
         start += len(positions)
@@ -1652,13 +1964,21 @@ def fetch_google(session, metadata, search):
 
             new += 1
 
+            job_url = f"{GOOGLE_RESULTS_URL}{jid}-{slug}"
+            description = ""
+            if description_filters_requested(search):
+                description = extract_page_description(
+                    session, job_url
+                )
+
             jobs[jid] = {
                 "title": titles.get(jid) or (
                     slug.replace("-", " ").title()
                 ),
                 "location": location or "",
-                "url": f"{GOOGLE_RESULTS_URL}{jid}-{slug}",
-                "posted": ""
+                "url": job_url,
+                "posted": "",
+                "_description": description
             }
 
         if page == 1 and not jobs:
@@ -1746,70 +2066,56 @@ def load_raw(session, company, metadata, search):
             search.get("amazon_country", ""),
             search.get("search_text", "")
         )
+        fetcher = lambda: fetch_amazon(session, metadata, search)
 
-        if key not in _RAW_CACHE:
-            _RAW_CACHE[key] = fetch_amazon(
-                session, metadata, search
-            )
-
-        return _RAW_CACHE[key]
-
-    if platform == "eightfold":
+    elif platform == "eightfold":
         key = (
             platform,
             metadata["api_url"],
             metadata["domain"],
-            search.get("location")
-            or primary_country(search),
-            search.get("search_text", "")
+            search.get("location") or primary_country(search),
+            search.get("search_text", ""),
+            description_filters_requested(search)
         )
+        fetcher = lambda: fetch_eightfold(session, metadata, search)
 
-        if key not in _RAW_CACHE:
-            _RAW_CACHE[key] = fetch_eightfold(
-                session, metadata, search
-            )
-
-        return _RAW_CACHE[key]
-
-    if platform == "google":
+    elif platform == "google":
         key = (
             platform,
-            search.get("location")
-            or primary_country(search),
+            search.get("location") or primary_country(search),
             search.get("search_text", "")
         )
+        fetcher = lambda: fetch_google(session, metadata, search)
 
-        if key not in _RAW_CACHE:
-            _RAW_CACHE[key] = fetch_google(
-                session, metadata, search
-            )
+    else:
+        key = (platform, metadata["api_url"])
+        if platform == "smartrecruiters":
+            # Description fetching depends on this search's exclusions.
+            key += (description_filters_requested(search),)
 
-        return _RAW_CACHE[key]
+        def fetcher():
+            if platform == "lever":
+                raw = fetch_lever(session, metadata)
+            elif platform == "ashby":
+                raw = fetch_ashby(session, metadata)
+            elif platform == "smartrecruiters":
+                raw = fetch_smartrecruiters(session, metadata, search)
+            elif platform == "atlassian":
+                raw = fetch_atlassian(session, metadata)
+            else:
+                raise ValueError(f"Unsupported platform: {platform}")
+            return raw, False
 
-    key = (platform, metadata["api_url"])
+    # Protect dictionary access, but do not hold the lock during network I/O:
+    # different companies must be able to fetch concurrently.
+    with _RAW_CACHE_LOCK:
+        cached = _RAW_CACHE.get(key)
+    if cached is not None:
+        return cached
 
-    if key not in _RAW_CACHE:
-
-        if platform == "lever":
-            raw = fetch_lever(session, metadata)
-
-        elif platform == "ashby":
-            raw = fetch_ashby(session, metadata)
-
-        elif platform == "smartrecruiters":
-            raw = fetch_smartrecruiters(session, metadata)
-
-        elif platform == "atlassian":
-            raw = fetch_atlassian(session, metadata)
-
-        else:
-            raise ValueError(
-                f"Unsupported platform: {platform}"
-            )
-
-        _RAW_CACHE[key] = (raw, False)
-
-    return _RAW_CACHE[key]
+    fetched = fetcher()
+    with _RAW_CACHE_LOCK:
+        return _RAW_CACHE.setdefault(key, fetched)
 
 
 def fetch_simple(session, company, metadata, search):
@@ -1919,7 +2225,7 @@ def probe_board(session, platform, slug):
                     "https://api.smartrecruiters.com/"
                     f"v1/companies/{slug}/postings"
                 )
-            })
+            }, {})
 
     except Exception:
         return None
@@ -2132,18 +2438,34 @@ def run_merge(source_path):
     print("Backup saved as companies.json.bak")
 
 
-AUDIT_HINTS = (
-    "learn", " ml", "ml ", "ai ", " ai", "data", "scien",
-    "research", "model", "llm", "deep", "vision", "nlp",
-    "speech", "perception", "inference", "neural", "gen ",
-    "genai", "algorithm", "applied", "quant", "analytics"
-)
+
+
+AUDIT_CSV_FILE = BASE_DIR / "audit_results.csv"
+
+AUDIT_FIELDS = [
+    "audit_timestamp",
+    "company",
+    "search",
+    "job_id",
+    "title",
+    "location",
+    "url",
+    "status",
+    "reason",
+    "matched_rule",
+    "description_status",
+    "description_matches"
+]
 
 
 def run_audit(companies, requested):
-    """List jobs your title filter EXCLUDES, so you can spot
-    relevant roles it would never alert you about."""
+
     session = create_session()
+    audit_rows = []
+
+    timestamp = time.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
     try:
         for company in select_companies(companies, requested):
@@ -2156,76 +2478,149 @@ def run_audit(companies, requested):
 
                 for search in company.get("searches", []):
 
+                    # Remove filters that we want to audit
+                    # independently after fetching the jobs.
                     wide = {
                         k: v for k, v in search.items()
                         if k not in (
-                            "title_any", "title_exclude",
-                            "title_preset"
+                            "title_any",
+                            "title_exclude",
+                            "title_preset",
+                            "description_exclude"
                         )
                     }
 
+                    # Internal flag: fetch and preserve descriptions.
+                    wide["_audit_mode"] = True
+
                     everything = fetch_jobs(
-                        session, company, metadata, wide
+                        session,
+                        company,
+                        metadata,
+                        wide
                     )
 
-                    kept, skipped = [], []
+                    kept = 0
+                    skipped = 0
+                    unavailable = 0
 
-                    for job in everything.values():
-                        if matches_title_filters(
-                            job.get("title", ""), search
-                        ):
-                            kept.append(job)
-                        else:
-                            skipped.append(job)
+                    for jid, job in everything.items():
 
-                    print(
-                        f"\n  [{search['name']}] in region: "
-                        f"{len(everything)} | alerting on: "
-                        f"{len(kept)} | filtered out: "
-                        f"{len(skipped)}"
-                    )
+                        title = job.get("title", "")
 
-                    titles = sorted({
-                        j.get("title", "") for j in skipped
-                    })
-
-                    out = BASE_DIR / (
-                        "audit_"
-                        + safe_filename(company["name"])
-                        + "_"
-                        + safe_filename(search["name"])
-                        + ".txt"
-                    )
-
-                    out.write_text(
-                        "\n".join(titles), encoding="utf-8"
-                    )
-
-                    maybe = [
-                        t for t in titles
-                        if any(
-                            h in f" {t.lower()} "
-                            for h in AUDIT_HINTS
+                        # Check title filters.
+                        title_reasons, title_rules = (
+                            get_title_filter_reasons(
+                                title, search
+                            )
                         )
-                    ]
+
+                        # Check description exclusions.
+                        description = clean_description(
+                            job.get("_description", "")
+                        )
+
+                        description_matches, description_status = (
+                            get_description_filter_matches(
+                                description, search
+                            )
+                        )
+
+                        reasons = list(title_reasons)
+                        matched_rules = list(title_rules)
+
+                        if description_matches:
+                            reasons.append(
+                                "description_exclude_match"
+                            )
+
+                            matched_rules.extend(
+                                "description_exclude: " + term
+                                for term in description_matches
+                            )
+
+                        if (
+                            description_status == "unavailable"
+                            and search.get("description_exclude")
+                        ):
+                            unavailable += 1
+
+                        ejected = bool(reasons)
+
+                        if ejected:
+                            skipped += 1
+                        else:
+                            kept += 1
+
+                        audit_rows.append({
+                            "audit_timestamp": timestamp,
+                            "company": company["name"],
+                            "search": search.get("name", ""),
+                            "job_id": jid,
+                            "title": title,
+                            "location": job.get("location", ""),
+                            "url": job.get("url", ""),
+                            "status": (
+                                "EJECTED" if ejected else "KEPT"
+                            ),
+                            "reason": "; ".join(reasons),
+                            "matched_rule": "; ".join(matched_rules),
+                            "description_status": description_status,
+                            "description_matches": "; ".join(
+                                description_matches
+                            )
+                        })
 
                     print(
-                        f"  Full excluded list saved: {out.name}"
+                        f"\n  [{search['name']}] "
+                        f"Fetched: {len(everything)} | "
+                        f"Kept: {kept} | "
+                        f"Ejected: {skipped} | "
+                        f"Description unavailable: {unavailable}"
                     )
-
-                    print(
-                        f"  Excluded titles that look "
-                        f"ML/data-related ({len(maybe)}):"
-                    )
-
-                    for t in maybe[:40]:
-                        print("   -", t)
 
             except Exception as exc:
                 print("  AUDIT ERROR:", exc)
 
     finally:
         session.close()
+
+    # Append results without deleting previous company audits.
+    file_exists = (
+        AUDIT_CSV_FILE.exists()
+        and AUDIT_CSV_FILE.stat().st_size > 0
+    )
+
+    with open(
+        AUDIT_CSV_FILE,
+        "a",
+        newline="",
+        encoding="utf-8-sig"
+    ) as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=AUDIT_FIELDS
+        )
+
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerows(audit_rows)
+
+    print(
+        f"\nAudit CSV saved: {AUDIT_CSV_FILE}"
+    )
+
+    print("Total audited jobs:", len(audit_rows))
+
+    print(
+        "Ejected:",
+        sum(
+            row["status"] == "EJECTED"
+            for row in audit_rows
+        )
+    )
 
 
 def run_probe(companies, requested):
@@ -2573,137 +2968,151 @@ def run_discovery(
 # MONITORING ENGINE
 # ============================================================
 
-def run_monitoring(companies, dry_run=False):
+def monitor_one_company(company):
+    """Monitor one company using a dedicated HTTP session.
+
+    Each company runs independently. Its results are returned to the main
+    thread so state files and email notifications are handled centrally.
+    """
     session = create_session()
 
+    result = {
+        "company": company["name"],
+        "changes": {},
+        "pending_states": {},
+        "successful": 0,
+        "failed": 0,
+        "total": 0,
+    }
+
+    try:
+        print("\n" + "=" * 70)
+        print("COMPANY:", company["name"])
+
+        searches = company.get("searches", [])
+        result["total"] = len(searches)
+
+        if not searches:
+            print("No searches configured.")
+            return result
+
+        try:
+            metadata = discover_company(session, company)
+        except Exception as exc:
+            print("DISCOVERY ERROR:", exc)
+            result["failed"] += len(searches)
+            return result
+
+        for search in searches:
+            monitor_name = f"{company['name']}_{search['name']}"
+            print("\nChecking:", monitor_name)
+
+            try:
+                current = fetch_jobs(
+                    session, company, metadata, search
+                )
+                previous = load_previous_jobs(monitor_name)
+
+                print("Jobs found:", len(current))
+
+                if previous is None:
+                    print("Initial baseline created.")
+                    result["pending_states"][monitor_name] = current
+                    result["successful"] += 1
+                    continue
+
+                if (
+                    len(previous) >= 10
+                    and len(current) < len(previous) * SANITY_MIN_RATIO
+                ):
+                    raise RuntimeError(
+                        "Suspiciously low job count. Previous state preserved."
+                    )
+
+                changes = detect_changes(previous, current)
+                count = count_changes(changes)
+                print("Changes:", count)
+
+                if count:
+                    result["changes"][monitor_name] = changes
+
+                result["pending_states"][monitor_name] = current
+                result["successful"] += 1
+
+            except Exception as exc:
+                result["failed"] += 1
+                print("ERROR:", exc)
+
+        return result
+
+    finally:
+        session.close()
+
+
+def run_monitoring(companies, dry_run=False, max_workers=3):
+    """Monitor up to three different companies concurrently."""
     changes_by_monitor = {}
     pending_states = {}
 
     successful = 0
     failed = 0
-    total = 0
+    total = sum(len(c.get("searches", [])) for c in companies)
 
-    try:
-        for company in companies:
+    worker_count = max(1, min(int(max_workers), 3, len(companies) or 1))
+    print(
+        f"\nRunning up to {worker_count} companies in parallel "
+        f"(maximum configured: 3)."
+    )
 
-            print("\n" + "=" * 70)
-            print("COMPANY:", company["name"])
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(monitor_one_company, company): company
+            for company in companies
+        }
 
-            searches = company.get("searches", [])
-            total += len(searches)
-
-            if not searches:
-                print("No searches configured.")
-                continue
-
+        for future in as_completed(futures):
+            company = futures[future]
             try:
-                metadata = discover_company(
-                    session,
-                    company
-                )
-
+                result = future.result()
             except Exception as exc:
-
-                print("DISCOVERY ERROR:", exc)
-                failed += len(searches)
+                # A company-level unexpected failure must not stop other workers.
+                company_searches = len(company.get("searches", []))
+                failed += company_searches
+                print(
+                    f"\nUNEXPECTED ERROR for {company['name']}: {exc}"
+                )
                 continue
 
-            for search in searches:
-
-                monitor_name = (
-                    f"{company['name']}_"
-                    f"{search['name']}"
-                )
-
-                print("\nChecking:", monitor_name)
-
-                try:
-                    current = fetch_jobs(
-                        session,
-                        company,
-                        metadata,
-                        search
-                    )
-
-                    previous = load_previous_jobs(
-                        monitor_name
-                    )
-
-                    print("Jobs found:", len(current))
-
-                    if previous is None:
-
-                        print("Initial baseline created.")
-
-                        pending_states[monitor_name] = current
-                        successful += 1
-                        continue
-
-                    if (
-                        len(previous) >= 10
-                        and len(current)
-                        < len(previous) * SANITY_MIN_RATIO
-                    ):
-                        raise RuntimeError(
-                            "Suspiciously low job count. "
-                            "Previous state preserved."
-                        )
-
-                    changes = detect_changes(
-                        previous,
-                        current
-                    )
-
-                    count = count_changes(changes)
-
-                    print("Changes:", count)
-
-                    if count:
-                        changes_by_monitor[monitor_name] = changes
-
-                    pending_states[monitor_name] = current
-                    successful += 1
-
-                except Exception as exc:
-
-                    failed += 1
-                    print("ERROR:", exc)
-
-    finally:
-        session.close()
+            changes_by_monitor.update(result["changes"])
+            pending_states.update(result["pending_states"])
+            successful += result["successful"]
+            failed += result["failed"]
 
     if changes_by_monitor:
-
         if dry_run:
-
             print(
-                "\nDRY RUN: Changes not emailed "
-                "and states not saved."
+                "\nDRY RUN: Changes not emailed and states not saved."
             )
-
             print(build_email(changes_by_monitor))
-
         else:
             send_email(changes_by_monitor)
-
     else:
         print("\nNo changes detected.")
 
+    # State writes happen only after all company workers have completed.
+    # This prevents partially completed parallel runs from saving early.
     if not dry_run:
-
         for name, jobs in pending_states.items():
             save_jobs(name, jobs)
 
     print("\nMONITORING SUMMARY")
     print("=" * 70)
-
+    print("Companies:", len(companies))
+    print("Parallel workers:", worker_count)
     print("Total searches:", total)
     print("Successful:", successful)
     print("Failed:", failed)
-    print(
-        "Changed monitors:",
-        len(changes_by_monitor)
-    )
+    print("Changed monitors:", len(changes_by_monitor))
 
     if failed:
         sys.exit(1)
@@ -2742,6 +3151,15 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true"
+    )
+
+    parser.add_argument(
+        "--company",
+        metavar="NAME",
+        help=(
+            "monitor only the specified company; "
+            "matches company names case-insensitively"
+        )
     )
 
     parser.add_argument(
@@ -2851,7 +3269,10 @@ def main():
 
             return
 
-        selected = select_companies(companies)
+        selected = select_companies(
+            companies,
+            requested=args.company
+        )
 
         if not selected:
             raise RuntimeError(
