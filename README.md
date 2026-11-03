@@ -80,12 +80,13 @@ JobNotify/
 
   `states/`                           Latest job snapshot for each
                                       company/search monitor.
-
+  
   `discovery/`                        Cached platform metadata used to
                                       query career portals.
-
+  
   `audit_results.csv`                 Appended audit results showing
                                       filter decisions.
+
   -----------------------------------------------------------------------
 
 ## Installation
