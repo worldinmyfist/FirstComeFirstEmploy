@@ -1,0 +1,168 @@
+{
+  "companies": [
+    {
+      "name": "Salesforce",
+      "platform": "auto",
+      "career_url": "https://salesforce.wd12.myworkdayjobs.com/External_Career_Site",
+      "enabled": true,
+      "searches": [
+        {
+          "name": "Software Engineering India",
+          "country": "India",
+          "job_family": "Software Engineering",
+          "search_text": "",
+          "description_exclude": [
+            "6+ years",
+            "6 years",
+            "minimum 6 years",
+            "at least 6 years",
+            "7+ years",
+            "7 years",
+            "minimum 7 years",
+            "at least 7 years",
+            "8+ years",
+            "8 years",
+            "minimum 8 years",
+            "at least 8 years",
+            "9+ years",
+            "9 years",
+            "minimum 9 years",
+            "at least 9 years",
+            "10+ years",
+            "10 years",
+            "minimum 10 years",
+            "at least 10 years",
+            "12+ years",
+            "15+ years"
+          ]
+        },
+        {
+          "name": "Data India",
+          "country": "India",
+          "job_family": "Data",
+          "search_text": "",
+          "description_exclude": [
+            "6+ years",
+            "6 years",
+            "minimum 6 years",
+            "at least 6 years",
+            "7+ years",
+            "7 years",
+            "minimum 7 years",
+            "at least 7 years",
+            "8+ years",
+            "8 years",
+            "minimum 8 years",
+            "at least 8 years",
+            "9+ years",
+            "9 years",
+            "minimum 9 years",
+            "at least 9 years",
+            "10+ years",
+            "10 years",
+            "minimum 10 years",
+            "at least 10 years",
+            "12+ years",
+            "15+ years"
+          ]
+        },
+        {
+          "name": "Machine Learning India",
+          "country": "India",
+          "search_text": "machine learning",
+          "description_exclude": [
+            "6+ years",
+            "6 years",
+            "minimum 6 years",
+            "at least 6 years",
+            "7+ years",
+            "7 years",
+            "minimum 7 years",
+            "at least 7 years",
+            "8+ years",
+            "8 years",
+            "minimum 8 years",
+            "at least 8 years",
+            "9+ years",
+            "9 years",
+            "minimum 9 years",
+            "at least 9 years",
+            "10+ years",
+            "10 years",
+            "minimum 10 years",
+            "at least 10 years",
+            "12+ years",
+            "15+ years"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Microsoft",
+      "career_url": "https://apply.careers.microsoft.com/careers",
+      "platform": "eightfold",
+      "domain": "microsoft.com",
+      "enabled": true,
+      "searches": [
+        {
+          "name": "India tech roles",
+          "country": "india",
+          "title_preset": "tech_roles",
+          "description_exclude": [
+            "6+ years",
+            "6 years",
+            "minimum 6 years",
+            "at least 6 years",
+            "7+ years",
+            "7 years",
+            "minimum 7 years",
+            "at least 7 years",
+            "8+ years",
+            "8 years",
+            "minimum 8 years",
+            "at least 8 years",
+            "9+ years",
+            "9 years",
+            "minimum 9 years",
+            "at least 9 years",
+            "10+ years",
+            "10 years",
+            "minimum 10 years",
+            "at least 10 years",
+            "12+ years",
+            "15+ years"
+          ]
+        },
+        {
+          "name": "Singapore tech roles",
+          "country": "singapore",
+          "title_preset": "tech_roles",
+          "description_exclude": [
+            "6+ years",
+            "6 years",
+            "minimum 6 years",
+            "at least 6 years",
+            "7+ years",
+            "7 years",
+            "minimum 7 years",
+            "at least 7 years",
+            "8+ years",
+            "8 years",
+            "minimum 8 years",
+            "at least 8 years",
+            "9+ years",
+            "9 years",
+            "minimum 9 years",
+            "at least 9 years",
+            "10+ years",
+            "10 years",
+            "minimum 10 years",
+            "at least 10 years",
+            "12+ years",
+            "15+ years"
+          ]
+        }
+      ]
+    }
+  ]
+}
