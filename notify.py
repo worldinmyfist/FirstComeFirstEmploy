@@ -111,7 +111,8 @@ def clean_description(value):
     """Convert an HTML/plain-text description into searchable text."""
     if not value:
         return ""
-    value = str(value)
+    # Unescape first: some APIs (Greenhouse) return HTML-escaped HTML.
+    value = html_lib.unescape(str(value))
     value = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", value)
     value = re.sub(r"(?s)<[^>]+>", " ", value)
     value = html_lib.unescape(value)
@@ -797,16 +798,18 @@ def workday_facets(metadata, search):
 # WORKDAY JOB FETCH
 # ============================================================
 
-def fetch_workday_description(session, metadata, external_path):
+def fetch_workday_description(
+    session, metadata, external_path, strict=False
+):
     """
     Fetch the full description for an individual Workday job.
+    strict=True raises after retries so the run keeps the previous
+    state instead of making a wrong keep/exclude decision.
     """
     if not external_path:
         return ""
 
     api_url = metadata["api_url"].rstrip("/")
-
-    # Convert the listing endpoint (.../jobs) to the CXS base.
     cxs_base = re.sub(r"/jobs$", "", api_url)
 
     path = external_path.lstrip("/")
@@ -814,26 +817,43 @@ def fetch_workday_description(session, metadata, external_path):
         return ""
 
     detail_url = f"{cxs_base}/{path}"
+    last_error = None
 
-    try:
-        response = session.get(detail_url, timeout=20)
-        response.raise_for_status()
+    for attempt in range(1, REQUEST_RETRIES + 1):
+        try:
+            response = session.get(detail_url, timeout=20)
 
-        data = response.json()
-        posting_info = data.get("jobPostingInfo") or {}
+            # Job vanished between listing and detail fetch.
+            if response.status_code == 404:
+                return ""
 
-        return posting_info.get("jobDescription", "") or ""
+            response.raise_for_status()
+            info = response.json().get("jobPostingInfo") or {}
+            return info.get("jobDescription", "") or ""
 
-    except Exception as e:
-        print(f"  Could not fetch Workday description: {e}")
-        return ""
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            if attempt < REQUEST_RETRIES:
+                time.sleep(attempt * 2)
+
+    if strict:
+        raise RuntimeError(
+            f"Workday description fetch failed: {detail_url} :: {last_error}"
+        )
+
+    print(f"  Could not fetch Workday description: {last_error}")
+    return ""
 
 def fetch_workday(session, metadata, search):
     jobs = {}
     offset = 0
     total = None
+    parsed = 0
 
     applied = workday_facets(metadata, search)
+
+    audit_mode = bool(search.get("_audit_mode"))
+    need_description = description_filters_requested(search)
 
     while True:
 
@@ -884,29 +904,63 @@ def fetch_workday(session, metadata, search):
             if not jid:
                 continue
 
-            description = fetch_workday_description(
-                session,
-                metadata,
-                external
-            )
+            parsed += 1
 
-            jobs[jid] = {
-                "title": (posting.get("title") or "").strip(),
+            title = (posting.get("title") or "").strip()
+
+            # Skip the per-job description request for jobs the
+            # title filters will reject anyway. In audit mode the
+            # title filters are stripped, so everything passes.
+            if not matches_title_filters(title, search):
+                continue
+
+            description = ""
+
+            if need_description:
+                description = clean_description(
+                    fetch_workday_description(
+                        session,
+                        metadata,
+                        external,
+                        strict=not audit_mode
+                    )
+                )
+
+            # Normal monitoring: apply description exclusions,
+            # same as Greenhouse and finalize() do.
+            # Audit mode keeps the job so run_audit can report it.
+            if (
+                not audit_mode
+                and description.strip()
+                and not matches_description_filters(
+                    description, search
+                )
+            ):
+                continue
+
+            job = {
+                "title": title,
                 "location": posting.get("locationsText", ""),
                 "url": urljoin(
                     metadata["job_base_url"] + "/",
                     external.lstrip("/")
                 ),
-                "posted": posting.get("postedOn", ""),
-                "_description": description
+                "posted": posting.get("postedOn", "")
             }
+
+            if audit_mode:
+                job["_description"] = description
+
+            jobs[jid] = job
 
         offset += len(postings)
 
         if offset >= total or len(postings) < PAGE_SIZE:
             break
 
-    if total and not jobs:
+    # Count parsed postings, not kept jobs. Otherwise a search where
+    # every job is filtered out would wrongly raise this error.
+    if total and not parsed:
         raise RuntimeError(
             "Workday reported postings but none were parsed"
         )
@@ -1104,9 +1158,19 @@ def fetch_jobs(session, company, metadata, search):
             f"Unsupported platform: {platform}"
         )
 
+    audit_mode = bool(search.get("_audit_mode"))
+
     # Optional title filters work on every platform.
+    # Safety net: never let _description leak into saved state.
     return {
-        jid: job for jid, job in jobs.items()
+        jid: (
+            job if audit_mode
+            else {
+                k: v for k, v in job.items()
+                if k != "_description"
+            }
+        )
+        for jid, job in jobs.items()
         if matches_title_filters(job.get("title", ""), search)
     }
 
@@ -1352,17 +1416,18 @@ def get_title_filter_reasons(title, search):
 
     return reasons, matched_rules
 
+def _contains_term(normalized_text, term):
+    t = normalize(term)
+    return bool(t) and f" {t} " in f" {normalized_text} "
+
 
 def matches_description_filters(description, search):
     text = normalize(description)
 
-    exclude = search.get("description_exclude", [])
-
-    for term in exclude:
-        if normalize(term) in text:
-            return False
-
-    return True
+    return not any(
+        _contains_term(text, term)
+        for term in search.get("description_exclude", [])
+    )
 
 
 def get_description_filter_matches(description, search):
@@ -1380,13 +1445,10 @@ def get_description_filter_matches(description, search):
     matched = [
         term
         for term in search.get("description_exclude", [])
-        if normalize(term)
-        and normalize(term) in text
+        if _contains_term(text, term)
     ]
 
     return matched, "available"
-
-
 
 def finalize(raw_jobs, search, server_country=False):
     jobs = {}
@@ -2064,7 +2126,8 @@ def load_raw(session, company, metadata, search):
             platform,
             primary_country(search),
             search.get("amazon_country", ""),
-            search.get("search_text", "")
+            search.get("search_text", ""),
+            description_filters_requested(search)
         )
         fetcher = lambda: fetch_amazon(session, metadata, search)
 
@@ -2083,7 +2146,8 @@ def load_raw(session, company, metadata, search):
         key = (
             platform,
             search.get("location") or primary_country(search),
-            search.get("search_text", "")
+            search.get("search_text", ""),
+            description_filters_requested(search)
         )
         fetcher = lambda: fetch_google(session, metadata, search)
 
@@ -2106,8 +2170,6 @@ def load_raw(session, company, metadata, search):
                 raise ValueError(f"Unsupported platform: {platform}")
             return raw, False
 
-    # Protect dictionary access, but do not hold the lock during network I/O:
-    # different companies must be able to fetch concurrently.
     with _RAW_CACHE_LOCK:
         cached = _RAW_CACHE.get(key)
     if cached is not None:
@@ -3021,9 +3083,12 @@ def monitor_one_company(company):
                     result["successful"] += 1
                     continue
 
-                if (
-                    len(previous) >= 10
-                    and len(current) < len(previous) * SANITY_MIN_RATIO
+                if previous and (
+                    (
+                        len(previous) >= 10
+                        and len(current) < len(previous) * SANITY_MIN_RATIO
+                    )
+                    or (len(previous) >= 3 and not current)
                 ):
                     raise RuntimeError(
                         "Suspiciously low job count. Previous state preserved."
