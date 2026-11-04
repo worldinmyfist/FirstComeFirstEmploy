@@ -170,6 +170,7 @@ python notify.py --audit "Example Company"
 
 If the ATS is already supported, no new platform implementation is required.
 
+
 ## Adding a new platform
 
 A company using an unsupported ATS requires a new platform integration.
@@ -187,15 +188,16 @@ Use browser developer tools and network requests to inspect public API calls.
 
 ### 2. Create a platform module
 
-Create a new module under `firstcomefirstemploy/platforms/`.
+Create a new Python file under `firstcomefirstemploy/platforms/`.
 
 For example:
 
 ```text
 firstcomefirstemploy/
 └── platforms/
-    ├── __init__.py
     ├── registry.py
+    ├── workday.py
+    ├── greenhouse.py
     └── example_ats.py
 ```
 
@@ -233,32 +235,9 @@ The platform implementation should provide:
 
 Follow the exact method signatures and return format used by existing platform integrations.
 
-### 3. Import the new platform
+### 3. Test the integration
 
-Add the new module import to `firstcomefirstemploy/platforms/__init__.py`:
-
-```python
-from . import example_ats
-```
-
-This executes the `@register` decorator and makes the platform available through the registry.
-
-No changes to `registry.py` are required because registration is handled by the decorator.
-
-### 4. Discovery and fetching
-
-The existing `discovery.py` automatically:
-
-- Detects the platform using `detect()`.
-- Calls its `discover()` method.
-- Caches the returned metadata under `discovery/`.
-- Reuses cached metadata on subsequent runs.
-
-The existing `fetcher.py` retrieves the integration through the registry and calls `fetch_jobs()`.
-
-No platform-specific changes to `discovery.py` or `registry.py` are required.
-
-### 5. Test the integration
+The platform package automatically imports new modules, and the `@register` decorator registers the integration. No changes to `registry.py`, `__init__.py`, `discovery.py`, or `fetcher.py` are required.
 
 ```bash
 python notify.py --discover "Example Company"
