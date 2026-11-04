@@ -39,7 +39,7 @@ The first successful run establishes a baseline without sending alerts for exist
 
 ## Repository structure
 
-```text id="h7xq9m"
+```text
 FirstComeFirstEmploy/
 ├── notify.py
 ├── companies.json
@@ -60,6 +60,7 @@ FirstComeFirstEmploy/
     │
     ├── platforms/
     │   ├── __init__.py
+    │   ├── base.py
     │   ├── registry.py
     │   ├── workday.py
     │   ├── greenhouse.py
@@ -87,6 +88,7 @@ FirstComeFirstEmploy/
 | `filters.py` | Search and job filtering |
 | `presets.py` | Default title-matching presets and country/location aliases |
 | `state.py` | Change detection and snapshots |
+| `platforms/base.py` | Common platform interface and shared functionality |
 | `platforms/registry.py` | Platform registration and lookup |
 | `platforms/` | ATS-specific integrations |
 | `notifiers/` | Email notifications |
@@ -121,6 +123,61 @@ SMTP_PORT=465
 Configure companies, career URLs, platform details, and search filters in `companies.json`.
 
 Use a Gmail App Password where applicable.
+
+### Search filters
+
+Each company can have multiple searches with independent filtering rules.
+
+| Field | Purpose |
+|---|---|
+| `location` | Filter jobs by location |
+| `title_any` | Include jobs matching any of the specified title keywords |
+| `title_exclude` | Exclude jobs matching any of the specified title keywords |
+| `description_any` | Include jobs matching any of the specified description keywords |
+| `description_exclude` | Exclude jobs matching any of the specified description keywords |
+
+Example:
+
+```json
+{
+  "name": "Example Company",
+  "career_url": "https://boards.greenhouse.io/example",
+  "platform": "greenhouse",
+  "enabled": true,
+  "searches": [
+    {
+      "name": "India AI Roles",
+      "location": "India",
+      "title_any": [
+        "Software Engineer",
+        "Machine Learning Engineer",
+        "Quant Researcher"
+      ],
+      "title_exclude": [
+        "Intern",
+        "Senior Manager"
+      ],
+      "description_any": [
+        "Python",
+        "C++",
+        "Machine Learning"
+      ],
+      "description_exclude": [
+        "Sales",
+        "Recruitment"
+      ]
+    }
+  ]
+}
+```
+
+- `title_any` and `description_any` define inclusion keywords.
+- `title_exclude` and `description_exclude` define exclusion keywords.
+- Inclusion and exclusion rules can be configured independently for each search.
+- Use `presets.py` for reusable default title-matching presets and country/location aliases.
+- Use `companies.json` for company-specific and search-specific keywords.
+
+The exact matching behavior follows the filtering implementation in `filters.py`.
 
 ## Adding a company
 
@@ -170,7 +227,6 @@ python notify.py --audit "Example Company"
 
 If the ATS is already supported, no new platform implementation is required.
 
-
 ## Adding a new platform
 
 A company using an unsupported ATS requires a new platform integration.
@@ -195,6 +251,7 @@ For example:
 ```text
 firstcomefirstemploy/
 └── platforms/
+    ├── base.py
     ├── registry.py
     ├── workday.py
     ├── greenhouse.py
@@ -209,7 +266,7 @@ from .registry import register
 
 
 @register
-class ExampleATS:
+class ExampleATS(Platform):
 
     name = "example_ats"
 
@@ -221,10 +278,12 @@ class ExampleATS:
             "api_url": "https://example-ats.com/api/jobs"
         }
 
-    def fetch_jobs(self, session, company, metadata, search):
-        # Fetch jobs using discovered metadata
-        # Handle pagination and normalize job results
-        return []
+    def fetch_raw(self, session, company, metadata, search):
+        # Fetch jobs using discovered metadata.
+        # Handle pagination and normalize job results.
+        jobs = {}
+
+        return jobs, False
 ```
 
 The platform implementation should provide:
@@ -232,7 +291,7 @@ The platform implementation should provide:
 - `name`: Unique platform identifier.
 - `detect(host, path)`: Identifies whether a career URL belongs to this ATS.
 - `discover(session, company)`: Retrieves ATS-specific metadata.
-- `fetch_jobs(session, company, metadata, search)`: Fetches and normalizes job postings.
+- `fetch_raw(session, company, metadata, search)`: Fetches and normalizes raw job listings.
 
 Follow the exact method signatures and return format used by existing platform integrations.
 
