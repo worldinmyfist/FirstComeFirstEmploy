@@ -117,6 +117,112 @@ Configure companies, career URLs, platform details, and search filters in `compa
 
 Use a Gmail App Password where applicable.
 
+## Adding a company
+
+Companies are configured in `companies.json`.
+
+### 1. Find the company's career page
+
+Identify the company's public careers URL and determine which ATS platform it uses.
+
+### 2. Add the company configuration
+
+Add a new company entry to `companies.json`, following the existing configuration format.
+
+For example, a company using an already-supported Greenhouse integration:
+
+```json
+{
+  "name": "Example Company",
+  "career_url": "https://boards.greenhouse.io/example",
+  "platform": "greenhouse",
+  "enabled": true,
+  "searches": [
+    {
+      "name": "India Tech Roles",
+      "location": "India",
+      "title_any": [
+        "Software Engineer",
+        "Machine Learning Engineer"
+      ],
+      "title_exclude": [
+        "Intern"
+      ]
+    }
+  ]
+}
+```
+
+This is an illustrative example; use the actual field names and structure expected by the existing configuration parser.
+
+### 3. Discover and test
+
+```bash
+python notify.py --discover "Example Company"
+python notify.py --probe "Example Company"
+python notify.py --audit "Example Company"
+```
+
+If the ATS is already supported, no new platform implementation should be necessary.
+
+## Adding a new platform
+
+If a company uses an ATS that is not currently supported, a new platform integration is required.
+
+### 1. Inspect the career portal
+
+Identify the public job-search endpoints and understand how the portal exposes:
+
+- Job listings and pagination.
+- Search keywords and location filters.
+- Job IDs, titles, locations, and application URLs.
+- Job descriptions, where available.
+
+Use the browser's developer tools/network requests to inspect the portal's public API.
+
+### 2. Implement the platform integration
+
+Create a new module under `firstcomefirstemploy/platforms/`.
+
+For example:
+
+```text
+firstcomefirstemploy/
+└── platforms/
+    └── example_ats.py
+```
+
+Implement the platform-specific logic for:
+
+- Fetching job postings.
+- Handling pagination and search parameters.
+- Retrieving descriptions where supported.
+- Normalizing results into the common job format used by FirstComeFirstEmploy.
+
+### 3. Add discovery support
+
+Update `firstcomefirstemploy/discovery.py` to identify the new ATS and retrieve the metadata required by its integration.
+
+Cache the discovered metadata under `discovery/` so it can be reused across monitoring runs.
+
+### 4. Register the integration
+
+Connect the new platform module to the existing fetching and discovery orchestration.
+
+Update the relevant platform dispatch logic in `fetcher.py` and any required command or configuration mappings.
+
+### 5. Test the integration
+
+```bash
+python notify.py --discover "Example Company"
+python notify.py --probe "Example Company"
+python notify.py --audit "Example Company"
+```
+
+Verify job counts, pagination, locations, application URLs, and filtering before enabling regular monitoring.
+
+Once integrated, other companies using the same ATS can reuse the implementation through configuration.
+
 ## Usage
 
 Run commands from the repository root.
@@ -139,15 +245,6 @@ For all available options:
 ```bash
 python notify.py --help
 ```
-
-## Extensibility
-
-FirstComeFirstEmploy separates core monitoring logic from platform-specific integrations.
-
-- Add companies through configuration without changing the monitoring engine.
-- Reuse existing ATS integrations across companies.
-- Add new ATS platforms through independent modules.
-- Extend discovery logic for platforms not yet supported.
 
 ## Data storage
 
