@@ -9,7 +9,7 @@ FirstComeFirstEmploy monitors configured company career pages, filters relevant 
 
 - Avoid manually checking multiple company career pages.
 - Catch newly posted jobs through automated monitoring.
-- Filter irrelevant roles based on keywords, titles, experience, and location.
+- Filter irrelevant roles by keywords, titles, experience, and location.
 - Track changes in job postings.
 - Monitor multiple companies across different ATS platforms from one place.
 
@@ -29,7 +29,7 @@ FirstComeFirstEmploy monitors configured company career pages, filters relevant 
 1. Load configured companies and searches.
 2. Discover the career portal platform and required metadata.
 3. Fetch jobs using platform-specific integrations.
-4. Apply configured search and filtering rules.
+4. Apply search and filtering rules.
 5. Compare results against previously saved snapshots.
 6. Send email alerts for detected changes.
 7. Save the latest results.
@@ -58,17 +58,19 @@ FirstComeFirstEmploy/
     ├── state.py
     │
     ├── platforms/
-    │   ├── workday
-    │   ├── greenhouse
-    │   ├── lever
-    │   ├── ashby
-    │   ├── smartrecruiters
-    │   ├── atlassian
-    │   ├── amazon
-    │   ├── eightfold
-    │   ├── google
-    │   ├── oracle
-    │   └── linkedin
+    │   ├── __init__.py
+    │   ├── registry.py
+    │   ├── workday.py
+    │   ├── greenhouse.py
+    │   ├── lever.py
+    │   ├── ashby.py
+    │   ├── smartrecruiters.py
+    │   ├── atlassian.py
+    │   ├── amazon.py
+    │   ├── eightfold.py
+    │   ├── google.py
+    │   ├── oracle.py
+    │   └── linkedin.py
     │
     ├── notifiers/
     │   └── email_notifier.py
@@ -83,6 +85,7 @@ FirstComeFirstEmploy/
 | `fetcher.py` | Job fetching orchestration |
 | `filters.py` | Search and job filtering |
 | `state.py` | Change detection and snapshots |
+| `platforms/registry.py` | Platform registration and lookup |
 | `platforms/` | ATS-specific integrations |
 | `notifiers/` | Email notifications |
 | `commands/` | CLI commands |
@@ -153,7 +156,7 @@ For example, a company using an already-supported Greenhouse integration:
 }
 ```
 
-This is an illustrative example; use the actual field names and structure expected by the existing configuration parser.
+This is illustrative; use the actual field names and structure expected by the configuration parser.
 
 ### 3. Discover and test
 
@@ -163,32 +166,33 @@ python notify.py --probe "Example Company"
 python notify.py --audit "Example Company"
 ```
 
-If the ATS is already supported, no new platform implementation should be necessary.
+If the ATS is already supported, no new platform implementation is required.
 
 ## Adding a new platform
 
-If a company uses an ATS that is not currently supported, a new platform integration is required.
+A company using an unsupported ATS requires a new platform integration.
 
 ### 1. Inspect the career portal
 
-Identify the public job-search endpoints and understand how the portal exposes:
+Identify its public job-search endpoints and understand:
 
 - Job listings and pagination.
 - Search keywords and location filters.
 - Job IDs, titles, locations, and application URLs.
 - Job descriptions, where available.
 
-Use the browser's developer tools/network requests to inspect the portal's public API.
+Use browser developer tools and network requests to inspect public API calls.
 
 ### 2. Implement the platform integration
 
-Create a new module under `firstcomefirstemploy/platforms/`.
+Create a module under `firstcomefirstemploy/platforms/`.
 
 For example:
 
 ```text
 firstcomefirstemploy/
 └── platforms/
+    ├── registry.py
     └── example_ats.py
 ```
 
@@ -197,19 +201,21 @@ Implement the platform-specific logic for:
 - Fetching job postings.
 - Handling pagination and search parameters.
 - Retrieving descriptions where supported.
-- Normalizing results into the common job format used by FirstComeFirstEmploy.
+- Normalizing results into the common job format.
 
 ### 3. Add discovery support
 
 Update `firstcomefirstemploy/discovery.py` to identify the new ATS and retrieve the metadata required by its integration.
 
-Cache the discovered metadata under `discovery/` so it can be reused across monitoring runs.
+Cache discovered metadata under `discovery/` for reuse across monitoring runs.
 
 ### 4. Register the integration
 
-Connect the new platform module to the existing fetching and discovery orchestration.
+Register the new platform in `firstcomefirstemploy/platforms/registry.py`.
 
-Update the relevant platform dispatch logic in `fetcher.py` and any required command or configuration mappings.
+The registry maps platform identifiers to their corresponding integrations. `fetcher.py` should use the registry to retrieve the appropriate implementation rather than maintaining a hardcoded `if/elif` chain.
+
+Update any required discovery or configuration mappings as well.
 
 ### 5. Test the integration
 
@@ -221,7 +227,7 @@ python notify.py --audit "Example Company"
 
 Verify job counts, pagination, locations, application URLs, and filtering before enabling regular monitoring.
 
-Once integrated, other companies using the same ATS can reuse the implementation through configuration.
+Once integrated, other companies using the same ATS can reuse the implementation through configuration alone.
 
 ## Usage
 
@@ -250,7 +256,7 @@ python notify.py --help
 
 - `companies.json`: Company and search configurations.
 - `discovery/`: Cached career portal metadata.
-- `states/`: Latest job snapshots used for change detection.
+- `states/`: Job snapshots used for change detection.
 
 These directories are local by default. The `states/` directory can optionally be synced through Google Drive.
 
