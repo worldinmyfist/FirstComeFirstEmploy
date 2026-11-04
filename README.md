@@ -16,7 +16,7 @@ FirstComeFirstEmploy monitors configured company career pages, filters relevant 
 ## Features
 
 - Monitor multiple companies and searches.
-- Support Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Atlassian, Amazon, Eightfold, Google, Oracle, and LinkedIn.
+- Support Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Atlassian, Amazon, Eightfold, Google, Oracle, and LinkedIn ATS platforms.
 - Automatically discover and cache career portal metadata where supported.
 - Apply configurable title, location, and description filters.
 - Built-in title-matching presets and country/location aliases.
