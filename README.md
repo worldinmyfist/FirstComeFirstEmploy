@@ -204,7 +204,8 @@ firstcomefirstemploy/
 Implement a platform class using the existing interface:
 
 ```python
-from firstcomefirstemploy.platforms.registry import register
+from .base import Platform
+from .registry import register
 
 
 @register
