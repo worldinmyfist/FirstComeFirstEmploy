@@ -19,6 +19,7 @@ FirstComeFirstEmploy monitors configured company career pages, filters relevant 
 - Support Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Atlassian, Amazon, Eightfold, Google, Oracle, and LinkedIn.
 - Automatically discover and cache career portal metadata where supported.
 - Apply configurable title, location, and description filters.
+- Built-in title-matching presets and country/location aliases.
 - Detect job additions, removals, and modifications.
 - Send email alerts for matching changes.
 - Audit filtering decisions and export results to CSV.
@@ -38,7 +39,7 @@ The first successful run establishes a baseline without sending alerts for exist
 
 ## Repository structure
 
-```text
+```text id="h7xq9m"
 FirstComeFirstEmploy/
 ├── notify.py
 ├── companies.json
@@ -81,9 +82,10 @@ FirstComeFirstEmploy/
 
 | Component | Responsibility |
 |---|---|
-| `discovery.py` | Career portal discovery |
+| `discovery.py` | Career portal discovery and metadata caching |
 | `fetcher.py` | Job fetching orchestration |
 | `filters.py` | Search and job filtering |
+| `presets.py` | Default title-matching presets and country/location aliases |
 | `state.py` | Change detection and snapshots |
 | `platforms/registry.py` | Platform registration and lookup |
 | `platforms/` | ATS-specific integrations |
@@ -122,7 +124,7 @@ Use a Gmail App Password where applicable.
 
 ## Adding a company
 
-Companies are configured in `companies.json`.
+Companies using an already-supported ATS can be added through `companies.json` without implementing new platform code.
 
 ### 1. Find the company's career page
 
@@ -183,39 +185,78 @@ Identify its public job-search endpoints and understand:
 
 Use browser developer tools and network requests to inspect public API calls.
 
-### 2. Implement the platform integration
+### 2. Create a platform module
 
-Create a module under `firstcomefirstemploy/platforms/`.
+Create a new module under `firstcomefirstemploy/platforms/`.
 
 For example:
 
 ```text
 firstcomefirstemploy/
 └── platforms/
+    ├── __init__.py
     ├── registry.py
     └── example_ats.py
 ```
 
-Implement the platform-specific logic for:
+Implement a platform class using the existing interface:
 
-- Fetching job postings.
-- Handling pagination and search parameters.
-- Retrieving descriptions where supported.
-- Normalizing results into the common job format.
+```python
+from firstcomefirstemploy.platforms.registry import register
 
-### 3. Add discovery support
 
-Update `firstcomefirstemploy/discovery.py` to identify the new ATS and retrieve the metadata required by its integration.
+@register
+class ExampleATS:
 
-Cache discovered metadata under `discovery/` for reuse across monitoring runs.
+    name = "example_ats"
 
-### 4. Register the integration
+    def detect(self, host, path):
+        return "example-ats.com" in host
 
-Register the new platform in `firstcomefirstemploy/platforms/registry.py`.
+    def discover(self, session, company):
+        return {
+            "api_url": "https://example-ats.com/api/jobs"
+        }
 
-The registry maps platform identifiers to their corresponding integrations. `fetcher.py` should use the registry to retrieve the appropriate implementation rather than maintaining a hardcoded `if/elif` chain.
+    def fetch_jobs(self, session, company, metadata, search):
+        # Fetch jobs using discovered metadata
+        # Handle pagination and normalize job results
+        return []
+```
 
-Update any required discovery or configuration mappings as well.
+The platform implementation should provide:
+
+- `name`: Unique platform identifier.
+- `detect(host, path)`: Identifies whether a career URL belongs to this ATS.
+- `discover(session, company)`: Retrieves ATS-specific metadata.
+- `fetch_jobs(session, company, metadata, search)`: Fetches and normalizes job postings.
+
+Follow the exact method signatures and return format used by existing platform integrations.
+
+### 3. Import the new platform
+
+Add the new module import to `firstcomefirstemploy/platforms/__init__.py`:
+
+```python
+from . import example_ats
+```
+
+This executes the `@register` decorator and makes the platform available through the registry.
+
+No changes to `registry.py` are required because registration is handled by the decorator.
+
+### 4. Discovery and fetching
+
+The existing `discovery.py` automatically:
+
+- Detects the platform using `detect()`.
+- Calls its `discover()` method.
+- Caches the returned metadata under `discovery/`.
+- Reuses cached metadata on subsequent runs.
+
+The existing `fetcher.py` retrieves the integration through the registry and calls `fetch_jobs()`.
+
+No platform-specific changes to `discovery.py` or `registry.py` are required.
 
 ### 5. Test the integration
 
