@@ -185,7 +185,7 @@ Companies using an already-supported ATS can be added through `companies.json` w
 
 ### 1. Find the company's career page
 
-Identify the company's public careers URL and determine which ATS platform it uses.
+Identify the company's public careers URL and determine which ATS platform it uses. Asking AI assistants can also help here in identifying platform name and careers page URLS.
 
 ### 2. Add the company configuration
 
