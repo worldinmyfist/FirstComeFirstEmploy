@@ -35,12 +35,12 @@ def build_email(all_changes):
             parts.append(f"<h3>NEW JOBS ({len(changes['added'])})</h3>")
             parts.extend(_job_lines(j, job) for j, job in changes["added"].items())
 
-        if changes["removed"]:
-            parts.append(f"<h3>REMOVED JOBS ({len(changes['removed'])})</h3>")
-            parts.extend(
-                _job_lines(j, job, posted=False, link=False)
-                for j, job in changes["removed"].items()
-            )
+        # if changes["removed"]:
+        #     parts.append(f"<h3>REMOVED JOBS ({len(changes['removed'])})</h3>")
+        #     parts.extend(
+        #         _job_lines(j, job, posted=False, link=False)
+        #         for j, job in changes["removed"].items()
+        #     )
 
         if changes["modified"]:
             parts.append(f"<h3>MODIFIED JOBS ({len(changes['modified'])})</h3>")

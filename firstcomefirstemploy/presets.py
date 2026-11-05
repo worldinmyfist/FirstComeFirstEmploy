@@ -14,7 +14,7 @@ TITLE_PRESETS = {
             "member of technical staff", "member technical staff",
             "quantitative", "quant", "member technical", "mts",
             "software engineering", "mle", "sr engineer",
-            "backend", "engineer", "computer scientist",
+            "backend", "engineer", "computer scientist", "application developer"
         ],
         "exclude": [
             "intern", "internship", "apprentice", "staff", "principal",

@@ -4,8 +4,13 @@ import time
 from urllib.parse import urljoin, urlparse
 
 from ..config import MAX_PAGES, POLITE_DELAY
-from ..filters import description_filters_requested, primary_country
+from ..filters import (
+    description_filters_requested,
+    passes_prefilters,
+    primary_country,
+)
 from ..utils.http import request_json
+from ..utils.parallel import map_concurrent
 from ..utils.text import clean_description, fmt_ts, join_locations
 from .base import Platform
 from .registry import register
@@ -30,6 +35,7 @@ def _pick(source, *keys):
 @register
 class Eightfold(Platform):
     name = "eightfold"
+    per_job_descriptions = True
 
     def detect(self, host, path):
         return host.endswith("careers.microsoft.com") or host.endswith("eightfold.ai")
@@ -96,6 +102,9 @@ class Eightfold(Platform):
             positions = payload.get("positions") or []
             total = payload.get("count") or payload.get("total") or 0
 
+            page_jobs = {}
+            raw_ids = {}
+
             for p in positions:
                 jid = p.get("id") or p.get("display_job_id")
 
@@ -113,15 +122,7 @@ class Eightfold(Platform):
                     "descriptionText", "job_description",
                 ))
 
-                # Listing results often lack the full description.
-                if fetch_descriptions and not description:
-                    try:
-                        description = self._detail_description(session, metadata, jid)
-                        time.sleep(POLITE_DELAY)
-                    except Exception as exc:
-                        print(f"  Eightfold description unavailable for {jid}: {exc}")
-
-                jobs[str(jid)] = {
+                page_jobs[str(jid)] = {
                     "title": (p.get("name") or p.get("title") or "").strip(),
                     "location": join_locations(p.get("locations") or p.get("location")),
                     "url": urljoin(metadata["site_base"] + "/", link),
@@ -130,6 +131,33 @@ class Eightfold(Platform):
                     ),
                     "_description": description,
                 }
+                raw_ids[str(jid)] = jid
+
+            if fetch_descriptions:
+                # Listing results often lack the full description. Fetch it
+                # concurrently, and only for jobs that pass the cheap filters.
+                wanted = [
+                    key for key, job in page_jobs.items()
+                    if not job["_description"]
+                    and passes_prefilters(job, search, server_country=bool(location))
+                ]
+
+                def describe(key):
+                    try:
+                        return self._detail_description(
+                            session, metadata, raw_ids[key]
+                        )
+                    except Exception as exc:
+                        print(
+                            f"  Eightfold description unavailable "
+                            f"for {raw_ids[key]}: {exc}"
+                        )
+                        return ""
+
+                for key, text in zip(wanted, map_concurrent(describe, wanted)):
+                    page_jobs[key]["_description"] = text
+
+            jobs.update(page_jobs)
 
             start += len(positions)
 

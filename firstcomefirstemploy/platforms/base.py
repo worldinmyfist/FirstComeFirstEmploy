@@ -3,7 +3,11 @@
 import threading
 from urllib.parse import urlparse
 
-from ..filters import apply_filters
+from ..filters import (
+    apply_filters,
+    description_filters_requested,
+    prefilter_signature,
+)
 
 _RAW_CACHE = {}
 _RAW_CACHE_LOCK = threading.Lock()
@@ -39,6 +43,11 @@ class Platform:
     """
 
     name = ""
+    # True if fetch_raw makes one request per job to get its description.
+    # Such platforms skip jobs the country/title filters reject (see
+    # filters.passes_prefilters), so searches with different rules must not
+    # share one raw download.
+    per_job_descriptions = False
     # e.g. "https://jobs.lever.co/{slug}" -> platform can be auto-found by
     # `--bootstrap`; leave None otherwise.
     bootstrap_url = None
@@ -71,8 +80,16 @@ class Platform:
         raw, server_country = self.load_raw(session, company, metadata, search)
         return apply_filters(raw, search, server_country)
 
-    def load_raw(self, session, company, metadata, search):
+    def _raw_key(self, metadata, search):
         key = self.cache_key(metadata, search)
+
+        if self.per_job_descriptions and description_filters_requested(search):
+            return (key, prefilter_signature(search))
+
+        return key
+
+    def load_raw(self, session, company, metadata, search):
+        key = self._raw_key(metadata, search)
 
         with _RAW_CACHE_LOCK:
             cached = _RAW_CACHE.get(key)

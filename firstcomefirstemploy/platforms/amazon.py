@@ -5,9 +5,14 @@ import time
 from urllib.parse import urljoin
 
 from ..config import MAX_PAGES, POLITE_DELAY
-from ..filters import description_filters_requested, primary_country
+from ..filters import (
+    description_filters_requested,
+    passes_prefilters,
+    primary_country,
+)
 from ..utils.http import request_json
 from ..utils.page import extract_page_description
+from ..utils.parallel import map_concurrent
 from ..utils.text import clean_description
 from .base import Platform
 from .registry import register
@@ -43,6 +48,7 @@ def _location_matches_country(location, country):
 @register
 class Amazon(Platform):
     name = "amazon"
+    per_job_descriptions = True
 
     def detect(self, host, path):
         return host.endswith("amazon.jobs")
@@ -85,6 +91,9 @@ class Amazon(Platform):
             batch = data.get("jobs") or []
             hits = data.get("hits", 0)
 
+            page_jobs = {}
+            needs_page = []
+
             for p in batch:
                 jid = p.get("id_icims") or p.get("id")
 
@@ -102,16 +111,34 @@ class Amazon(Platform):
                 full = p.get("description") or p.get("job_description")
                 description = full or p.get("description_short") or ""
 
-                if need_description and not full:
-                    description = extract_page_description(session, url) or description
-
-                jobs[str(jid)] = {
+                page_jobs[str(jid)] = {
                     "title": (p.get("title") or "").strip(),
                     "location": location,
                     "url": url,
                     "posted": p.get("posted_date", ""),
                     "_description": clean_description(description),
                 }
+
+                if need_description and not full:
+                    needs_page.append(str(jid))
+
+            # Job-detail pages are only worth fetching for jobs that pass the
+            # country/title filters; fetch those concurrently.
+            wanted = [
+                key for key in needs_page
+                if passes_prefilters(page_jobs[key], search, server_country=bool(code))
+            ]
+
+            fetched = map_concurrent(
+                lambda key: extract_page_description(session, page_jobs[key]["url"]),
+                wanted,
+            )
+
+            for key, text in zip(wanted, fetched):
+                if text:
+                    page_jobs[key]["_description"] = clean_description(text)
+
+            jobs.update(page_jobs)
 
             offset += len(batch)
 

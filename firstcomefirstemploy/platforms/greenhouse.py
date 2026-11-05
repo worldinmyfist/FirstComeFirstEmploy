@@ -1,5 +1,6 @@
 """Greenhouse boards (boards-api.greenhouse.io)."""
 
+from ..filters import needs_description_text
 from ..utils.http import request_json
 from .base import Platform, slug_from_company
 from .registry import register
@@ -42,9 +43,15 @@ class Greenhouse(Platform):
         print("Board token:", metadata["board_token"])
         print("Postings:", metadata["total_postings"])
 
+    def cache_key(self, metadata, search):
+        # `content=true` multiplies the payload size, so only ask for it
+        # when a filter actually reads descriptions.
+        return (self.name, metadata.get("api_url"), needs_description_text(search))
+
     def fetch_raw(self, session, company, metadata, search):
+        content = "true" if needs_description_text(search) else "false"
         data = request_json(
-            session, metadata["api_url"], params={"content": "true"}
+            session, metadata["api_url"], params={"content": content}
         )
 
         jobs = {}

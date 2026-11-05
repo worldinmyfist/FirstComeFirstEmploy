@@ -1,5 +1,7 @@
 """Job filtering shared by every platform (country, title, keyword, description)."""
 
+from functools import lru_cache
+
 from .presets import COUNTRY_ALIASES, TITLE_PRESETS
 from .utils.text import clean_description, normalize
 
@@ -17,6 +19,11 @@ def description_filters_requested(search):
     return bool(search.get("description_exclude")) or is_audit(search)
 
 
+def needs_description_text(search):
+    """True when filtering reads job descriptions (exclusions or search_text)."""
+    return description_filters_requested(search) or bool(search.get("search_text"))
+
+
 def primary_country(search):
     value = search.get("country")
 
@@ -26,9 +33,23 @@ def primary_country(search):
     return normalize(value)
 
 
+@lru_cache(maxsize=4096)
+def _normalized_term(term):
+    """Filter terms repeat for every job, so normalize each one only once."""
+    return normalize(term)
+
+
+def _pad(normalized_text):
+    return f" {normalized_text} "
+
+
+def _in_padded(padded_text, term):
+    t = _normalized_term(term)
+    return bool(t) and f" {t} " in padded_text
+
+
 def contains_term(normalized_text, term):
-    t = normalize(term)
-    return bool(t) and f" {t} " in f" {normalized_text} "
+    return _in_padded(_pad(normalized_text), term)
 
 
 # ------------------------------------------------------------
@@ -79,14 +100,23 @@ def title_terms(search):
     return any_terms, exclude
 
 
+def prefilter_signature(search):
+    """Hashable identity of the checks passes_prefilters() applies."""
+    any_terms, exclude = title_terms(search)
+    country = search.get("country") or ""
+    countries = country if isinstance(country, list) else [country]
+
+    return (tuple(any_terms), tuple(exclude), tuple(str(c) for c in countries))
+
+
 def matches_title_filters(title, search):
     any_terms, exclude = title_terms(search)
-    normalized = normalize(title)
+    padded = _pad(normalize(title))
 
-    if any_terms and not any(contains_term(normalized, t) for t in any_terms):
+    if any_terms and not any(_in_padded(padded, t) for t in any_terms):
         return False
 
-    return not any(contains_term(normalized, t) for t in exclude)
+    return not any(_in_padded(padded, t) for t in exclude)
 
 
 def get_title_filter_reasons(title, search):
@@ -114,10 +144,10 @@ def get_title_filter_reasons(title, search):
 # ------------------------------------------------------------
 
 def matches_description_filters(description, search):
-    text = normalize(description)
+    padded = _pad(normalize(description))
 
     return not any(
-        contains_term(text, term)
+        _in_padded(padded, term)
         for term in search.get("description_exclude", [])
     )
 
@@ -132,11 +162,11 @@ def get_description_filter_matches(description, search):
     if not description.strip():
         return [], "unavailable"
 
-    text = normalize(description)
+    padded = _pad(normalize(description))
 
     matched = [
         term for term in search.get("description_exclude", [])
-        if contains_term(text, term)
+        if _in_padded(padded, term)
     ]
 
     return matched, "available"
@@ -145,6 +175,21 @@ def get_description_filter_matches(description, search):
 # ------------------------------------------------------------
 # Pipeline applied to raw platform results
 # ------------------------------------------------------------
+
+def passes_prefilters(job, search, server_country=False):
+    """Country + title checks that need no description.
+
+    Platforms call this before paying for a per-job description request: the
+    same checks run again in apply_filters, so a job that fails here would be
+    dropped anyway and its description is never used.
+    """
+    if not server_country and not matches_country(
+        job.get("location", ""), search.get("country")
+    ):
+        return False
+
+    return matches_title_filters(job.get("title", ""), search)
+
 
 def strip_description(job):
     return {k: v for k, v in job.items() if k != "_description"}

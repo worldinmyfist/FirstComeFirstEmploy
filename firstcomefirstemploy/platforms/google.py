@@ -4,9 +4,14 @@ import re
 import time
 
 from ..config import MAX_PAGES, POLITE_DELAY
-from ..filters import description_filters_requested, primary_country
+from ..filters import (
+    description_filters_requested,
+    passes_prefilters,
+    primary_country,
+)
 from ..utils.http import request_text
 from ..utils.page import extract_page_description
+from ..utils.parallel import map_concurrent
 from .base import Platform
 from .registry import register
 
@@ -20,6 +25,7 @@ def _search_location(search):
 @register
 class Google(Platform):
     name = "google"
+    per_job_descriptions = True
 
     def detect(self, host, path):
         return host == "careers.google.com" or (
@@ -64,24 +70,38 @@ class Google(Platform):
             )
 
             new = 0
+            page_jobs = {}
 
             for jid, slug in found:
-                if jid in jobs:
+                if jid in jobs or jid in page_jobs:
                     continue
 
                 new += 1
                 url = f"{RESULTS_URL}{jid}-{slug}"
 
-                jobs[jid] = {
+                page_jobs[jid] = {
                     "title": titles.get(jid) or slug.replace("-", " ").title(),
                     "location": location or "",
                     "url": url,
                     "posted": "",
-                    "_description": (
-                        extract_page_description(session, url)
-                        if need_description else ""
-                    ),
+                    "_description": "",
                 }
+
+            if need_description:
+                wanted = [
+                    jid for jid, job in page_jobs.items()
+                    if passes_prefilters(job, search, server_country=True)
+                ]
+
+                fetched = map_concurrent(
+                    lambda jid: extract_page_description(session, page_jobs[jid]["url"]),
+                    wanted,
+                )
+
+                for jid, text in zip(wanted, fetched):
+                    page_jobs[jid]["_description"] = text
+
+            jobs.update(page_jobs)
 
             if page_no == 1 and not jobs:
                 raise RuntimeError(

@@ -3,8 +3,9 @@
 import time
 
 from ..config import MAX_PAGES, POLITE_DELAY
-from ..filters import description_filters_requested
+from ..filters import description_filters_requested, passes_prefilters
 from ..utils.http import request_json
+from ..utils.parallel import map_concurrent
 from ..utils.text import clean_description
 from .base import Platform, slug_from_company
 from .registry import register
@@ -33,6 +34,7 @@ def _fetch_description(session, metadata, job_id):
 @register
 class SmartRecruiters(Platform):
     name = "smartrecruiters"
+    per_job_descriptions = True
     bootstrap_url = "https://jobs.smartrecruiters.com/{slug}"
 
     def detect(self, host, path):
@@ -53,6 +55,7 @@ class SmartRecruiters(Platform):
     def fetch_raw(self, session, company, metadata, search):
         jobs = {}
         offset = 0
+        need_description = description_filters_requested(search)
 
         for _ in range(MAX_PAGES):
             data = request_json(
@@ -63,6 +66,8 @@ class SmartRecruiters(Platform):
 
             content = data.get("content") or []
             total = data.get("totalFound", 0)
+
+            page_jobs = {}
 
             for p in content:
                 jid = p.get("id")
@@ -78,24 +83,36 @@ class SmartRecruiters(Platform):
                     x for x in (loc.get("city"), loc.get("region"), country) if x
                 )
 
-                description = ""
+                page_jobs[str(jid)] = {
+                    "title": (p.get("name") or "").strip(),
+                    "location": location,
+                    "url": f"https://jobs.smartrecruiters.com/{metadata['slug']}/{jid}",
+                    "posted": p.get("releasedDate", ""),
+                    "_description": "",
+                }
 
-                if description_filters_requested(search):
+            if need_description:
+                # Only jobs that survive the country/title filters need a
+                # description; fetch those concurrently.
+                wanted = [
+                    jid for jid, job in page_jobs.items()
+                    if passes_prefilters(job, search)
+                ]
+
+                def describe(jid):
                     try:
-                        description = _fetch_description(session, metadata, jid)
+                        return _fetch_description(session, metadata, jid)
                     except Exception as exc:
                         print(
                             f"  Could not fetch SmartRecruiters description "
                             f"for {jid}: {exc}"
                         )
+                        return ""
 
-                jobs[str(jid)] = {
-                    "title": (p.get("name") or "").strip(),
-                    "location": location,
-                    "url": f"https://jobs.smartrecruiters.com/{metadata['slug']}/{jid}",
-                    "posted": p.get("releasedDate", ""),
-                    "_description": description,
-                }
+                for jid, text in zip(wanted, map_concurrent(describe, wanted)):
+                    page_jobs[jid]["_description"] = text
+
+            jobs.update(page_jobs)
 
             offset += len(content)
 

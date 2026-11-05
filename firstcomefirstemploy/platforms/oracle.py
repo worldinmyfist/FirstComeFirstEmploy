@@ -5,18 +5,20 @@ import time
 from urllib.parse import urlparse
 
 from ..config import POLITE_DELAY
-from ..filters import description_filters_requested, is_audit
+from ..filters import description_filters_requested, is_audit, passes_prefilters
 from ..utils.http import request_json
+from ..utils.parallel import map_concurrent
 from ..utils.text import clean_description
 from .base import Platform
 from .registry import register
 
-PAGE_SIZE = 100
+PAGE_SIZE = 50
 
 
 @register
 class Oracle(Platform):
     name = "oracle"
+    per_job_descriptions = True
 
     def detect(self, host, path):
         return (
@@ -124,6 +126,8 @@ class Oracle(Platform):
             if not postings:
                 break
 
+            page_jobs = {}
+
             for posting in postings:
                 if posting.get("Id") is None:
                     continue
@@ -136,17 +140,6 @@ class Oracle(Platform):
                     or ""
                 )
 
-                if need_description:
-                    try:
-                        description = self._description(session, metadata, jid)
-                    except Exception as exc:
-                        if not audit:
-                            raise RuntimeError(
-                                f"Oracle description unavailable for {jid}: {exc}"
-                            ) from exc
-
-                        print(f"  Description unavailable: {jid}")
-
                 url = (
                     posting.get("ExternalUrlSeo")
                     or posting.get("ExternalUrl")
@@ -157,7 +150,7 @@ class Oracle(Platform):
                     )
                 )
 
-                jobs[jid] = {
+                page_jobs[jid] = {
                     "title": (posting.get("Title") or "").strip(),
                     "location": posting.get("PrimaryLocation") or "",
                     "url": url,
@@ -168,6 +161,30 @@ class Oracle(Platform):
                     ),
                     "_description": description,
                 }
+
+            if need_description:
+                wanted = [
+                    jid for jid, job in page_jobs.items()
+                    if passes_prefilters(job, search)
+                ]
+
+                def describe(jid):
+                    try:
+                        return self._description(session, metadata, jid)
+                    except Exception as exc:
+                        if not audit:
+                            raise RuntimeError(
+                                f"Oracle description unavailable for {jid}: {exc}"
+                            ) from exc
+
+                        print(f"  Description unavailable: {jid}")
+                        return None
+
+                for jid, text in zip(wanted, map_concurrent(describe, wanted)):
+                    if text is not None:
+                        page_jobs[jid]["_description"] = text
+
+            jobs.update(page_jobs)
 
             offset += len(postings)
 

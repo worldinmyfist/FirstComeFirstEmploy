@@ -5,8 +5,11 @@ import re
 import time
 
 
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
 def normalize(value):
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    return _NON_ALNUM.sub(" ", str(value or "").lower()).strip()
 
 
 def clean_description(value):

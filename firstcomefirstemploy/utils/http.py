@@ -4,8 +4,9 @@ import json
 import time
 
 import requests
+from requests.adapters import HTTPAdapter
 
-from ..config import REQUEST_RETRIES, REQUEST_TIMEOUT
+from ..config import HTTP_POOL_SIZE, REQUEST_RETRIES, REQUEST_TIMEOUT
 
 HEADERS = {
     "User-Agent": (
@@ -27,6 +28,13 @@ HTML_HEADERS = {
 def create_session():
     session = requests.Session()
     session.headers.update(HEADERS)
+
+    # Worker threads share one session; size the pool so they reuse
+    # keep-alive connections instead of opening (and discarding) new ones.
+    adapter = HTTPAdapter(pool_connections=HTTP_POOL_SIZE, pool_maxsize=HTTP_POOL_SIZE)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
     return session
 
 

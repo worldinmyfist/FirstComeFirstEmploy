@@ -24,5 +24,8 @@ REQUEST_TIMEOUT = 30
 POLITE_DELAY = 0.3          # pause between paged requests
 MAX_PAGES = 200
 
-MAX_WORKERS = 3             # companies monitored in parallel
+MAX_WORKERS = 6             # companies monitored in parallel
+DESCRIPTION_WORKERS = 6     # concurrent per-job description requests (per company)
+PAGE_WORKERS = 4            # concurrent listing pages where the total is known (Workday)
+HTTP_POOL_SIZE = 32         # connections kept alive per HTTP session
 SANITY_MIN_RATIO = 0.5      # refuse to save state if job count collapses

@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from ..config import PAGE_WORKERS
 from ..filters import (
     description_filters_requested,
     is_audit,
@@ -12,6 +13,7 @@ from ..filters import (
     matches_title_filters,
 )
 from ..utils.http import request_json, retry
+from ..utils.parallel import map_concurrent
 from ..utils.text import clean_description, normalize
 from .base import Platform
 from .registry import register
@@ -304,17 +306,12 @@ class Workday(Platform):
                 print(f"  {value['descriptor']}: {value['id']}")
 
     def fetch(self, session, company, metadata, search):
-        jobs = {}
-        offset = 0
-        total = None
-        parsed = 0
-
         applied = _build_facets(metadata, search)
         audit = is_audit(search)
         need_description = description_filters_requested(search)
 
-        while True:
-            data = request_json(
+        def load_page(offset):
+            return request_json(
                 session,
                 metadata["api_url"],
                 payload={
@@ -325,15 +322,27 @@ class Workday(Platform):
                 },
             )
 
-            if total is None:
-                total = data.get("total", 0)
-                print("  Matching postings:", total)
+        first = load_page(0)
 
-            postings = data.get("jobPostings") or []
+        # Workday only reports `total` on the first page; once it is known
+        # the remaining pages are independent, so fetch them concurrently.
+        total = first.get("total", 0)
+        print("  Matching postings:", total)
 
-            if not postings:
-                break
+        pages = [first.get("jobPostings") or []]
 
+        if pages[0] and len(pages[0]) >= PAGE_SIZE:
+            offsets = list(range(len(pages[0]), total, PAGE_SIZE))
+
+            pages.extend(
+                data.get("jobPostings") or []
+                for data in map_concurrent(load_page, offsets, workers=PAGE_WORKERS)
+            )
+
+        parsed = 0
+        candidates = {}
+
+        for postings in pages:
             for posting in postings:
                 external = posting.get("externalPath", "")
                 jid = _job_id(posting)
@@ -349,41 +358,53 @@ class Workday(Platform):
                 if not matches_title_filters(title, search):
                     continue
 
-                description = ""
+                candidates[jid] = (title, external, posting)
 
-                if need_description:
-                    description = clean_description(
-                        _fetch_description(
-                            session, metadata, external, strict=not audit
-                        )
+        # Description requests are independent too. In strict (non-audit)
+        # mode a failure aborts the run so the previous state is kept.
+        descriptions = {}
+
+        if need_description:
+            def describe(jid):
+                external = candidates[jid][1]
+
+                return clean_description(
+                    _fetch_description(
+                        session, metadata, external, strict=not audit
                     )
+                )
 
-                # Audit mode keeps the job so the audit can report it.
-                if (
-                    not audit
-                    and description.strip()
-                    and not matches_description_filters(description, search)
-                ):
-                    continue
+            order = list(candidates)
 
-                job = {
-                    "title": title,
-                    "location": posting.get("locationsText", ""),
-                    "url": urljoin(
-                        metadata["job_base_url"] + "/", external.lstrip("/")
-                    ),
-                    "posted": posting.get("postedOn", ""),
-                }
+            for jid, text in zip(order, map_concurrent(describe, order)):
+                descriptions[jid] = text
 
-                if audit:
-                    job["_description"] = description
+        jobs = {}
 
-                jobs[jid] = job
+        for jid, (title, external, posting) in candidates.items():
+            description = descriptions.get(jid, "")
 
-            offset += len(postings)
+            # Audit mode keeps the job so the audit can report it.
+            if (
+                not audit
+                and description.strip()
+                and not matches_description_filters(description, search)
+            ):
+                continue
 
-            if offset >= total or len(postings) < PAGE_SIZE:
-                break
+            job = {
+                "title": title,
+                "location": posting.get("locationsText", ""),
+                "url": urljoin(
+                    metadata["job_base_url"] + "/", external.lstrip("/")
+                ),
+                "posted": posting.get("postedOn", ""),
+            }
+
+            if audit:
+                job["_description"] = description
+
+            jobs[jid] = job
 
         # Count parsed postings, not kept jobs, so a search where every job
         # is filtered out doesn't raise.
