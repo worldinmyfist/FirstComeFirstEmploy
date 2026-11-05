@@ -1,15 +1,10 @@
 # FirstComeFirstEmploy
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/worldinmyfist/FirstComeFirstEmploy/blob/main/LICENSE) [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://img.shields.io/badge/python-3.9%2B-blue.svg)
 
 **A job alert bot that watches company career pages and emails you the moment a matching role is added, removed, or changed.**
 
 Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the companies you care about, describe the roles you want, and let it run on a schedule. It compares each run against the previous snapshot and emails you only when something actually changed.
-
-<!-- TODO: add a screenshot of a real alert email, then uncomment the line below.
-![Sample alert email](docs/images/sample-email.png)
--->
 
 ## Contents
 
@@ -23,6 +18,7 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 - [Data and state](#data-and-state)
 - [How it works](#how-it-works)
 - [Adding a new platform](#adding-a-new-platform)
+- [Fetch caching and `cache_key`](#fetch-caching-and-cache_key)
 - [Limitations and responsible use](#limitations-and-responsible-use)
 - [License](#license)
 
@@ -37,7 +33,7 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 
 ## Quickstart
 
-```bash
+```
 # 1. Install
 git clone https://github.com/worldinmyfist/FirstComeFirstEmploy.git
 cd FirstComeFirstEmploy
@@ -66,7 +62,7 @@ The first successful run for a company establishes a **baseline** and sends no a
 
 Create a `.env` file in the project root:
 
-```env
+```
 EMAIL_FROM=your_email@gmail.com
 EMAIL_TO=recipient@example.com
 EMAIL_PASSWORD=your_gmail_app_password
@@ -79,7 +75,7 @@ For Gmail, use an [App Password](https://support.google.com/accounts/answer/1858
 
 Verify delivery with:
 
-```bash
+```
 python notify.py --test-email
 ```
 
@@ -87,7 +83,7 @@ python notify.py --test-email
 
 Companies and searches live in `companies.json`. Each company has a platform and one or more searches:
 
-```json
+```
 {
   "name": "Example Company",
   "career_url": "https://boards.greenhouse.io/example",
@@ -116,11 +112,6 @@ Companies and searches live in `companies.json`. Each company has a platform and
 | `description_any`     | Keep jobs whose description matches **any** of these keywords    |
 | `description_exclude` | Drop jobs whose description matches **any** of these keywords    |
 
-<!-- TODO: state the exact matching rules here, taken from filters.py:
-     - case-sensitive or not?  substring, whole-word, or regex?
-     - how are the fields combined (AND across fields?)  what happens when a field is empty?
-     - what counts as a "modified" job (which fields are compared)? -->
-
 Reusable title presets and location aliases are defined in `firstcomefirstemploy/presets.py`. Put company-specific keywords in `companies.json`.
 
 Not every portal exposes job descriptions. Where a platform returns none, description filters cannot match, so check with `--audit` before relying on them.
@@ -138,11 +129,10 @@ If the company uses an already-supported platform, no code is needed:
    | Ashby           | `jobs.ashbyhq.com/<name>`         |
    | Workday         | `<name>.wd<N>.myworkdayjobs.com`  |
    | SmartRecruiters | `jobs.smartrecruiters.com/<name>` |
-
 2. Add an entry to `companies.json` (see [Configuration](#configuration)).
 3. Verify it:
 
-   ```bash
+   ```
    python notify.py --discover "Example Company"
    python notify.py --probe "Example Company"
    python notify.py --audit "Example Company"
@@ -154,22 +144,20 @@ If the portal uses an unsupported platform, see [Adding a new platform](#adding-
 
 Run commands from the repository root.
 
-| Command                                             | Description                                             |
-|-----------------------------------------------------|---------------------------------------------------------|
-| `python notify.py`                                  | Monitor all enabled companies                           |
-| `python notify.py --dry-run`                        | Preview changes without sending emails or saving state  |
-| `python notify.py --company Amazon`                 | Monitor a specific company                              |
-| `python notify.py --discover`                       | Discover career portal metadata                         |
-| `python notify.py --refresh-discovery`              | Refresh cached metadata                                 |
-| `python notify.py --probe Amazon`                   | Test live job fetching                                  |
-| `python notify.py --audit Amazon`                   | Show why each job was kept or filtered out              |
-| `python notify.py --bootstrap companies.csv`        | Generate company configurations from a CSV              |
-| `python notify.py --merge companies.generated.json` | Merge generated configurations into `companies.json`    |
-| `python notify.py --test-email`                     | Send a test email                                       |
+| Command                                             | Description                                            |
+|-----------------------------------------------------|--------------------------------------------------------|
+| `python notify.py`                                  | Monitor all enabled companies                          |
+| `python notify.py --dry-run`                        | Preview changes without sending emails or saving state |
+| `python notify.py --company Amazon`                 | Monitor a specific company                             |
+| `python notify.py --discover`                       | Discover career portal metadata                        |
+| `python notify.py --refresh-discovery`              | Refresh cached metadata                                |
+| `python notify.py --probe Amazon`                   | Test live job fetching                                 |
+| `python notify.py --audit Amazon`                   | Show why each job was kept or filtered out             |
+| `python notify.py --bootstrap companies.csv`        | Generate company configurations from a CSV             |
+| `python notify.py --merge companies.generated.json` | Merge generated configurations into `companies.json`   |
+| `python notify.py --test-email`                     | Send a test email                                      |
 
 Run `python notify.py --help` for all options.
-
-<!-- TODO: document the companies.csv columns expected by --bootstrap. -->
 
 ## Running on a schedule
 
@@ -177,7 +165,7 @@ FirstComeFirstEmploy runs once and exits, so schedule it with whatever you have.
 
 **cron (Linux / macOS):**
 
-```cron
+```
 */30 * * * * cd /path/to/FirstComeFirstEmploy && .venv/bin/python notify.py >> run.log 2>&1
 ```
 
@@ -200,7 +188,7 @@ Each run:
 
 1. Loads configured companies and searches.
 2. Discovers the platform and required metadata (cached after the first time).
-3. Fetches jobs with the platform-specific integration.
+3. Fetches jobs with the platform-specific integration. Searches that would send the same request share one fetch (see [Fetch caching and `cache_key`](#fetch-caching-and-cache_key)).
 4. Applies the search filters.
 5. Diffs against the previous snapshot.
 6. Emails any additions, removals and modifications.
@@ -267,6 +255,7 @@ from .registry import register
 class ExampleATS(Platform):
 
     name = "example_ats"
+    per_job_descriptions = False  # True if descriptions need one request per job
 
     def detect(self, host, path):
         return "example-ats.com" in host
@@ -276,6 +265,10 @@ class ExampleATS(Platform):
             "api_url": "https://example-ats.com/api/jobs"
         }
 
+    def cache_key(self, metadata, search):
+        # Include every search field that changes the request sent to the API.
+        return (self.name, search.get("search_text", ""))
+
     def fetch_raw(self, session, company, metadata, search):
         # Fetch jobs using the discovered metadata.
         # Handle pagination and normalize results.
@@ -284,28 +277,54 @@ class ExampleATS(Platform):
         return jobs, False
 ```
 
-| Member                                          | Purpose                                                  |
-|-------------------------------------------------|----------------------------------------------------------|
-| `name`                                          | Unique platform identifier, used in `companies.json`     |
-| `detect(host, path)`                            | Returns `True` if a career URL belongs to this platform  |
-| `discover(session, company)`                    | Returns platform metadata, cached in `discovery/`        |
-| `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs                              |
+| Member                                          | Purpose                                                                  |
+|-------------------------------------------------|--------------------------------------------------------------------------|
+| `name`                                          | Unique platform identifier, used in `companies.json`                     |
+| `detect(host, path)`                            | Returns `True` if a career URL belongs to this platform                  |
+| `discover(session, company)`                    | Returns platform metadata, cached in `discovery/`                        |
+| `cache_key(metadata, search)`                   | Identifies which searches can share one fetch (see below)                |
+| `per_job_descriptions`                          | Set to `True` if descriptions need one extra request per job             |
+| `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs; returns `(jobs, server_filtered)`           |
 
-<!-- TODO: document the normalized job dict shape returned by fetch_raw (keys such as id, title,
-     location, url, description) and what the second return value (False above) means.
-     Copy both from platforms/base.py or an existing integration. -->
-
-Use an existing integration such as `greenhouse.py` as the reference for exact signatures and return format.
+Use an existing integration such as `greenhouse.py` or `amazon.py` as the reference for exact signatures and return format.
 
 **3. Test it.** The platform package imports new modules automatically and `@register` registers the class, so nothing needs to change in `registry.py`, `__init__.py`, `discovery.py` or `fetcher.py`.
 
-```bash
+```
 python notify.py --discover "Example Company"
 python notify.py --probe "Example Company"
 python notify.py --audit "Example Company"
 ```
 
 Before enabling regular monitoring, verify job counts, pagination, locations, application URLs and filtering. Pull requests with new platform integrations are welcome.
+
+## Fetch caching and `cache_key`
+
+A company can have several searches. Many of them differ only in local filters such as title keywords, so refetching the same listings for each one would waste requests. Each platform decides which search fields change the *request* it sends, and `cache_key` returns exactly those fields. Searches with an equal key share a single fetch, and the filters are then applied to the shared results for each search.
+
+```python
+def cache_key(self, metadata, search):
+    return (
+        self.name,
+        primary_country(search),                  # sent to the API
+        search.get("amazon_country", ""),         # sent to the API
+        search.get("search_text", ""),            # sent to the API
+        description_filters_requested(search),    # decides whether per-job pages are fetched
+    )
+```
+
+**Rule of thumb:** include every search field that changes what `fetch_raw` requests or returns, and leave out fields that are only used in local filtering (`title_any`, `title_exclude`, and so on).
+
+- **Too few fields:** searches that need different data share one result, and jobs go missing.
+- **Too many fields:** identical requests are repeated, which is slower and less polite to the career site.
+
+### Description fetching
+
+Some portals only return descriptions on each job's own page. Set `per_job_descriptions = True` on the platform class, and fetch those pages only when `description_filters_requested(search)` is true and only for jobs that pass `passes_prefilters`, to keep request counts low. Include `description_filters_requested(search)` in the cache key, because it changes how much work `fetch_raw` does.
+
+### Return value
+
+`fetch_raw` returns `(jobs, server_filtered)`. Return `True` as the second value when the server already applied the country filter (Amazon does this with `country[]`), so it isn't applied again locally.
 
 ## Limitations and responsible use
 
@@ -316,4 +335,4 @@ Before enabling regular monitoring, verify job counts, pagination, locations, ap
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/worldinmyfist/FirstComeFirstEmploy/blob/main/LICENSE)
