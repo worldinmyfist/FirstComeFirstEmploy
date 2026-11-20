@@ -20,6 +20,11 @@ from .registry import register
 
 PAGE_SIZE = 20
 
+# Requisition ids: JR12345 (most tenants) or R04711 (e.g. Cohesity).
+_REQ_ID = re.compile(r"(?<![A-Za-z0-9])(?:JR|R)\d{4,}(?![A-Za-z0-9])", re.I)
+# Multi-location postings come back as "2 Locations" in the listing.
+_MULTI_LOC = re.compile(r"^\s*\d+\s+locations?\s*$", re.I)
+
 FACET_ALIASES = {
     "job family": [
         "job family", "job family group", "job category",
@@ -184,13 +189,13 @@ def _build_facets(metadata, search):
 # Job fetch
 # ------------------------------------------------------------
 
-def _fetch_description(session, metadata, external_path, strict=False):
-    """Full description of one job. strict=True raises after retries so the
+def _fetch_detail(session, metadata, external_path, strict=False):
+    """jobPostingInfo of one job (description, locations). strict=True raises after retries so the
     run keeps the previous state instead of making a wrong keep/exclude call."""
     path = (external_path or "").lstrip("/")
 
     if not path.startswith("job/"):
-        return ""
+        return {}
 
     cxs_base = re.sub(r"/jobs$", "", metadata["api_url"].rstrip("/"))
     detail_url = f"{cxs_base}/{path}"
@@ -200,11 +205,10 @@ def _fetch_description(session, metadata, external_path, strict=False):
 
         # Job vanished between listing and detail fetch.
         if response.status_code == 404:
-            return ""
+            return {}
 
         response.raise_for_status()
-        info = response.json().get("jobPostingInfo") or {}
-        return info.get("jobDescription", "") or ""
+        return response.json().get("jobPostingInfo") or {}
 
     try:
         return retry(attempt, (requests.RequestException, ValueError))
@@ -215,17 +219,28 @@ def _fetch_description(session, metadata, external_path, strict=False):
             ) from exc
 
         print(f"  Could not fetch Workday description: {exc}")
-        return ""
+        return {}
 
+
+def _fetch_description(session, metadata, external_path, strict=False):
+    info = _fetch_detail(session, metadata, external_path, strict=strict)
+    return info.get("jobDescription", "") or ""
+
+
+def _location_from_detail(info, fallback):
+    """'2 Locations' -> 'Bangalore - India Office; Pune - Panchshil - India Office'."""
+    names = [info.get("location")] + list(info.get("additionalLocations") or [])
+    names = [n for n in names if isinstance(n, str) and n.strip()]
+    return "; ".join(dict.fromkeys(names)) or fallback
 
 def _job_id(posting):
     for field in posting.get("bulletFields") or []:
-        match = re.search(r"JR\d+", str(field), re.I)
+        match = _REQ_ID.search(str(field))
         if match:
             return match.group(0).upper()
 
     external = posting.get("externalPath", "")
-    match = re.search(r"JR\d+", external, re.I)
+    match = _REQ_ID.search(external)
     return match.group(0).upper() if match else external
 
 
@@ -363,21 +378,28 @@ class Workday(Platform):
         # Description requests are independent too. In strict (non-audit)
         # mode a failure aborts the run so the previous state is kept.
         descriptions = {}
+        details = {}
 
-        if need_description:
-            def describe(jid):
-                external = candidates[jid][1]
+        multi = [
+            jid for jid, (_, _, posting) in candidates.items()
+            if _MULTI_LOC.match(posting.get("locationsText") or "")
+        ]
+        targets = list(candidates) if need_description else multi
 
-                return clean_description(
-                    _fetch_description(
-                        session, metadata, external, strict=not audit
-                    )
+        if targets:
+            def load_detail(jid):
+                # Only a description-filter failure aborts the run; a missing
+                # location detail just keeps "2 Locations".
+                return _fetch_detail(
+                    session, metadata, candidates[jid][1],
+                    strict=need_description and not audit,
                 )
 
-            order = list(candidates)
-
-            for jid, text in zip(order, map_concurrent(describe, order)):
-                descriptions[jid] = text
+            for jid, info in zip(targets, map_concurrent(load_detail, targets)):
+                details[jid] = info
+                descriptions[jid] = clean_description(
+                    info.get("jobDescription", "") or ""
+                ) if need_description else ""
 
         jobs = {}
 
@@ -394,7 +416,13 @@ class Workday(Platform):
 
             job = {
                 "title": title,
-                "location": posting.get("locationsText", ""),
+                "location": (
+                    _location_from_detail(
+                        details.get(jid) or {}, posting.get("locationsText", "")
+                    )
+                    if jid in multi
+                    else posting.get("locationsText", "")
+                ),
                 "url": urljoin(
                     metadata["job_base_url"] + "/", external.lstrip("/")
                 ),

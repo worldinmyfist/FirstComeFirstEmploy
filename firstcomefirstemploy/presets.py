@@ -17,23 +17,25 @@ TITLE_PRESETS = {
             "backend", "engineer", "computer scientist", "application developer"
         ],
         "exclude": [
-            "intern", "internship", "apprentice", "staff", "principal",
+            "intern", "internship", "apprentice", "senior staff", "staff engineer", "staff software", "staff research", "staff mechanical", "staff forward", "staff partner", "staff information", "principal",
             "architect", "phd", "fixed term contract", "manager", "lead",
             "qa", "testing", "test", "verification", "asic", "fpga",
             "management", "validation", "design engineer",
             "solutions engineer", "hardware engineer", "modelling engineer",
             "devops engineer", "system engineer", "systems engineer",
-            "thermal engineer", "dft engineer", "support engineer",
+            "thermal engineer", "dft engineer", "support engineer", "director", "president", "quality assurance"
         ],
     }
 }
 
 COUNTRY_ALIASES = {
     "india": [
-        "india", "bengaluru", "bangalore", "hyderabad", "mumbai", "pune",
-        "chennai", "gurgaon", "gurugram", "noida", "new delhi", "delhi",
-        "ahmedabad", "kolkata", "kochi",
-    ],
+        "india", "bengaluru", "bangalore", "hyderabad"],
+#    "india": [
+#        "india", "bengaluru", "bangalore", "hyderabad", "mumbai", "pune",
+#        "chennai", "gurgaon", "gurugram", "noida", "new delhi", "delhi",
+#        "ahmedabad", "kolkata", "kochi",
+#    ],
     "united states": [
         "united states", "usa", "u.s.", "new york", "california", "texas",
         "seattle", "san francisco", "austin", "chicago", "boston",

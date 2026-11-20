@@ -1,6 +1,8 @@
 """Job filtering shared by every platform (country, title, keyword, description)."""
 
 from functools import lru_cache
+import re
+
 
 from .presets import COUNTRY_ALIASES, TITLE_PRESETS
 from .utils.text import clean_description, normalize
@@ -143,7 +145,31 @@ def get_title_filter_reasons(title, search):
 # Description filters
 # ------------------------------------------------------------
 
+
+_EXPERIENCE_RANGE = re.compile(
+    r"\b(\d+)\s*(?:-|–|—|to)\s*(\d+)\s*years?\b",
+    flags=re.I,
+)
+
+
+def _normalize_experience_ranges(description):
+    """Replace experience ranges with their lower bound.
+
+    Examples:
+        1-6 years   -> minimum 1 years
+        4 to 8 years -> minimum 4 years
+        6-10 years  -> minimum 6 years
+        8+ years    -> unchanged
+    """
+    return _EXPERIENCE_RANGE.sub(
+        lambda m: f"minimum {m.group(1)} years",
+        description,
+    )
+
+
+
 def matches_description_filters(description, search):
+    description = _normalize_experience_ranges(description)
     padded = _pad(normalize(description))
 
     return not any(
@@ -162,6 +188,7 @@ def get_description_filter_matches(description, search):
     if not description.strip():
         return [], "unavailable"
 
+    description = _normalize_experience_ranges(description)
     padded = _pad(normalize(description))
 
     matched = [

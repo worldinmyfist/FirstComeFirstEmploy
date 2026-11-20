@@ -108,8 +108,20 @@ class Amazon(Platform):
                     continue
 
                 url = urljoin("https://www.amazon.jobs", p.get("job_path", ""))
-                full = p.get("description") or p.get("job_description")
-                description = full or p.get("description_short") or ""
+                
+                full = p.get("description") or p.get("job_description") or ""
+
+                basic = p.get("basic_qualifications") or ""
+                preferred = p.get("preferred_qualifications") or ""
+
+                description = "\n".join(
+                    part for part in [
+                        full or p.get("description_short") or "",
+                        "Basic Qualifications:\n" + basic if basic else "",
+                        "Preferred Qualifications:\n" + preferred if preferred else "",
+                    ]
+                    if part
+                )
 
                 page_jobs[str(jid)] = {
                     "title": (p.get("title") or "").strip(),
@@ -119,7 +131,7 @@ class Amazon(Platform):
                     "_description": clean_description(description),
                 }
 
-                if need_description and not full:
+                if need_description and not (full and basic and preferred):
                     needs_page.append(str(jid))
 
             # Job-detail pages are only worth fetching for jobs that pass the

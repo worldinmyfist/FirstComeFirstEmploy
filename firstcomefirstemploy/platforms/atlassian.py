@@ -42,11 +42,23 @@ class Atlassian(Platform):
                     (p.get("portalJobPost") or {}).get("updatedDate")
                 ),
                 "_description": clean_description(
-                    p.get("overview")
-                    or p.get("description")
-                    or p.get("jobDescription")
-                    or ""
-                ),
+                " ".join(
+                    str(p.get(field) or "")
+                    for field in (
+                        "overview",
+                        "description",
+                        "jobDescription",
+                        "job_description",
+                        "responsibilities",
+                        "requirements",
+                        "qualifications",
+                        "minimumQualifications",
+                        "preferredQualifications",
+                        "basicQualifications",
+                    )
+                )
+            ),
+
             }
 
         return jobs, False

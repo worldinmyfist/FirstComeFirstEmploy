@@ -26,7 +26,7 @@ def _job_lines(jid, job, posted=True, link=True):
 
 
 def build_email(all_changes):
-    parts = ["<html><body><h2>FIRSTCOMEFIRSTEMPLOY UPDATE</h2><hr>"]
+    parts = ["<html><body><h2>FirstComeFirstEmploy UPDATE</h2><hr>"]
 
     for name, changes in all_changes.items():
         parts.append(f"<h2>MONITOR: {escape(name)}</h2>")
