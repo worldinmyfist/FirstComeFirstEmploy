@@ -122,15 +122,21 @@ If the company uses an already-supported platform, no code is needed:
 
 1. Find the company's public careers URL and identify the platform from the URL pattern:
 
-   | Platform        | Typical URL pattern               |
-   |-----------------|-----------------------------------|
-   | Greenhouse      | `boards.greenhouse.io/<name>`     |
-   | Lever           | `jobs.lever.co/<name>`            |
-   | Ashby           | `jobs.ashbyhq.com/<name>`         |
-   | Workday         | `<name>.wd<N>.myworkdayjobs.com`  |
-   | SmartRecruiters | `jobs.smartrecruiters.com/<name>` |
-2. Add an entry to `companies.json` (see [Configuration](#configuration)).
-3. Verify it:
+   
+| Platform | Typical URL pattern |
+|---|---|
+| Greenhouse | `boards.greenhouse.io/<name>` or `job-boards.greenhouse.io/<name>` |
+| Workday | `<name>.wd<N>.myworkdayjobs.com` |
+| Lever | `jobs.lever.co/<name>` |
+| Ashby | `jobs.ashbyhq.com/<name>` |
+| SmartRecruiters | `jobs.smartrecruiters.com/<name>` |
+| Eightfold | Company-specific careers domain (e.g., `apply.careers.microsoft.com/careers`) |
+| Oracle Recruiting Cloud | `<name>.fa.<region>.oraclecloud.com/hcmUI/CandidateExperience/` |
+| Rippling | `ats.rippling.com/<name>/jobs` |
+| TurboHire | `<name>.turbohire.co` |
+
+3. Add an entry to `companies.json` (see [Configuration](#configuration)).
+4. Verify it:
 
    ```
    python notify.py --discover "Example Company"
