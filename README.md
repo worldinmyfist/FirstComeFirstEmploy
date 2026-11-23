@@ -7,12 +7,12 @@
 Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the companies you care about, describe the roles you want, and let it run on a schedule. It compares each run against the previous snapshot and emails you only when something actually changed.
 
 ## Contents
-
 - [Highlights](#highlights)
 - [Quickstart](#quickstart)
 - [Email setup](#email-setup)
 - [Configuration](#configuration)
 - [Adding a company](#adding-a-company)
+- [Bulk company bootstrap and LLM fallback](#bulk-company-bootstrap-and-llm-fallback)
 - [Usage](#usage)
 - [Running on a schedule](#running-on-a-schedule)
 - [Data and state](#data-and-state)
@@ -23,17 +23,17 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 - [License](#license)
 
 ## Highlights
-
 - **One tool, many portals:** Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Eightfold, plus custom integrations for Amazon, Google, Atlassian, Oracle and LinkedIn.
 - **Change detection, not just scraping:** alerts for added, removed and modified jobs, based on snapshots from the previous run.
 - **Per-company searches:** each company can have several searches, each with its own title, location and description filters.
 - **Auto-discovery:** detects the platform and required metadata from a career URL, and caches it.
+- **Bulk bootstrap with optional LLM fallback:** discover boards from a CSV using platform probes, then Anthropic, OpenAI or Gemini for unresolved names; LLM suggestions must pass live ATS verification.
 - **Debuggable filtering:** `--audit` shows why each job was kept or dropped; `--probe` tests live fetching; `--dry-run` previews without emailing or saving.
 - **Easy to extend:** a new platform is one Python file with a `@register` decorator. No other files need to change.
 
 ## Quickstart
 
-```
+```bash
 # 1. Install
 git clone https://github.com/worldinmyfist/FirstComeFirstEmploy.git
 cd FirstComeFirstEmploy
@@ -62,7 +62,7 @@ The first successful run for a company establishes a **baseline** and sends no a
 
 Create a `.env` file in the project root:
 
-```
+```dotenv
 EMAIL_FROM=your_email@gmail.com
 EMAIL_TO=recipient@example.com
 EMAIL_PASSWORD=your_gmail_app_password
@@ -75,7 +75,7 @@ For Gmail, use an [App Password](https://support.google.com/accounts/answer/1858
 
 Verify delivery with:
 
-```
+```bash
 python notify.py --test-email
 ```
 
@@ -83,7 +83,7 @@ python notify.py --test-email
 
 Companies and searches live in `companies.json`. Each company has a platform and one or more searches:
 
-```
+```json
 {
   "name": "Example Company",
   "career_url": "https://boards.greenhouse.io/example",
@@ -104,13 +104,13 @@ Companies and searches live in `companies.json`. Each company has a platform and
 
 ### Search fields
 
-| Field                 | Purpose                                                          |
-|-----------------------|------------------------------------------------------------------|
-| `location`            | Keep only jobs in this location (country/city aliases supported) |
-| `title_any`           | Keep jobs whose title matches **any** of these keywords          |
-| `title_exclude`       | Drop jobs whose title matches **any** of these keywords          |
-| `description_any`     | Keep jobs whose description matches **any** of these keywords    |
-| `description_exclude` | Drop jobs whose description matches **any** of these keywords    |
+| Field | Purpose |
+|---|---|
+| `location` | Keep only jobs in this location (country/city aliases supported) |
+| `title_any` | Keep jobs whose title matches **any** of these keywords |
+| `title_exclude` | Drop jobs whose title matches **any** of these keywords |
+| `description_any` | Keep jobs whose description matches **any** of these keywords |
+| `description_exclude` | Drop jobs whose description matches **any** of these keywords |
 
 Reusable title presets and location aliases are defined in `firstcomefirstemploy/presets.py`. Put company-specific keywords in `companies.json`.
 
@@ -122,7 +122,6 @@ If the company uses an already-supported platform, no code is needed:
 
 1. Find the company's public careers URL and identify the platform from the URL pattern:
 
-   
 | Platform | Typical URL pattern |
 |---|---|
 | Greenhouse | `boards.greenhouse.io/<name>` or `job-boards.greenhouse.io/<name>` |
@@ -135,33 +134,128 @@ If the company uses an already-supported platform, no code is needed:
 | Rippling | `ats.rippling.com/<name>/jobs` |
 | TurboHire | `<name>.turbohire.co` |
 
-3. Add an entry to `companies.json` (see [Configuration](#configuration)).
-4. Verify it:
+2. Add an entry to `companies.json` (see [Configuration](#configuration)).
+3. Verify it:
 
-   ```
+   ```bash
    python notify.py --discover "Example Company"
    python notify.py --probe "Example Company"
    python notify.py --audit "Example Company"
    ```
 
-If the portal uses an unsupported platform, see [Adding a new platform](#adding-a-new-platform).
+For many companies at once, see [Bulk company bootstrap and LLM fallback](#bulk-company-bootstrap-and-llm-fallback). If the portal uses an unsupported platform, see [Adding a new platform](#adding-a-new-platform).
+
+## Bulk company bootstrap and LLM fallback
+
+`--bootstrap` discovers career boards from company names in a CSV. It first tries **live, non-LLM discovery**, so an API key is not required for ordinary platform probing. An LLM is an optional final fallback for companies that remain unresolved.
+
+### Prepare a CSV
+
+```csv
+name,location
+Bespoke Labs,India
+Proximal,India
+Sarvam,India
+Google,India
+```
+
+```bash
+python notify.py --bootstrap companies.csv
+```
+
+Bootstrap tries known boards and company-specific portals, then slug-based ATS probes, then Workday tenant/site guesses, and finally an optional LLM hint. It will **verify the suggested URL with a supported platform integration before accepting it**. Unsupported, invalid or empty boards remain unresolved.
+
+### Optional LLM providers: Gemini, OpenAI, Anthropic
+
+Select **one** of the following providers by adding its key and `BOOTSTRAP_LLM_PROVIDER` to the project-root `.env`. You do not need to add keys for all three.
+
+**Gemini (Google AI Studio)**
+
+Get an API key at [Google AI Studio](https://aistudio.google.com/api-keys). Eligible Gemini models/accounts may have a limited free API tier; availability, model support and search-grounding quotas vary.
+
+```dotenv
+GEMINI_API_KEY=your-gemini-api-key
+BOOTSTRAP_LLM_PROVIDER=gemini
+GEMINI_LLM_MODEL=gemini-3.1-flash-lite
+BOOTSTRAP_LLM_WEB_SEARCH=0
+```
+
+**OpenAI**
+
+Get an API key at [OpenAI API Keys](https://platform.openai.com/api-keys). OpenAI API billing is separate from ChatGPT subscriptions.
+
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+BOOTSTRAP_LLM_PROVIDER=openai
+OPENAI_LLM_MODEL=gpt-4.1-mini
+BOOTSTRAP_LLM_WEB_SEARCH=1
+```
+
+**Anthropic (Claude)**
+
+Get an API key from the [Claude Console](https://console.anthropic.com/). API credits/billing are separate from consumer subscriptions.
+
+```dotenv
+ANTHROPIC_API_KEY=your-anthropic-api-key
+BOOTSTRAP_LLM_PROVIDER=anthropic
+ANTHROPIC_LLM_MODEL=claude-haiku-5-5
+BOOTSTRAP_LLM_WEB_SEARCH=1
+```
+
+These are alternatives, **not** three blocks to paste together. Use the provider and model available to your account.
+
+### Shared LLM settings
+
+| Variable | Meaning |
+|---|---|
+| `BOOTSTRAP_LLM_PROVIDER` | `gemini`, `openai`, `anthropic`, or `auto` (default) |
+| `GEMINI_API_KEY` | Gemini key; `GOOGLE_API_KEY` is also accepted |
+| `OPENAI_API_KEY` | OpenAI key |
+| `ANTHROPIC_API_KEY` | Anthropic key |
+| `GEMINI_LLM_MODEL` | Default: `gemini-3.1-flash-lite` |
+| `OPENAI_LLM_MODEL` | Default: `gpt-4.1-mini` |
+| `ANTHROPIC_LLM_MODEL` | Default: `claude-haiku-5-5` |
+| `BOOTSTRAP_LLM_MODEL` | Optional override of the selected provider's model |
+| `BOOTSTRAP_LLM_WEB_SEARCH` | `1` enables provider-supported web search/grounding; `0` disables it |
+
+With `BOOTSTRAP_LLM_PROVIDER=auto`, the current priority is **Anthropic → OpenAI → Gemini** based on which keys are configured. **Set `gemini` explicitly if you want Gemini even when OpenAI or Anthropic keys are present.** The default web-search setting in the code is `1`, so set `0` explicitly to avoid search-grounding usage.
+
+Web search is optional: with `0`, the model can still suggest URLs from its existing knowledge, but it cannot look up current career pages through provider-native search. Provider support, eligibility and billing differ; a free model quota does not necessarily include free search grounding. With `1`, a compatible provider may use web search, subject to provider limits and charges.
+
+The integration uses HTTP requests directly; no extra provider-specific Python SDK is required.
+
+### Results and verification
+
+After bootstrap, review:
+
+- `companies.generated.json`: verified, newly discovered companies for this run.
+- `companies.unresolved.csv`: companies that were not verified, including any LLM-suggested platform, URL and notes.
+
+An LLM suggestion **is not proof** that a job board is valid. For example, `jobs.ashbyhq.com/proximal` may be suggested but rejected if the board API does not return usable jobs. Board slugs can be case-sensitive; confirm the exact URL on the company's official careers page when a suggestion fails.
+
+```bash
+# Review the generated configuration, then merge verified companies
+python notify.py --merge companies.generated.json
+```
+
+An empty generated file means no **new verified** companies were produced in that run. Previously configured companies may be skipped; unresolved suggestions do not enter the generated configuration. Keep `.env` outside version control, and remember that provider API quotas, permissions or credits can prevent the LLM fallback from running even while normal ATS probes still work.
 
 ## Usage
 
 Run commands from the repository root.
 
-| Command                                             | Description                                            |
-|-----------------------------------------------------|--------------------------------------------------------|
-| `python notify.py`                                  | Monitor all enabled companies                          |
-| `python notify.py --dry-run`                        | Preview changes without sending emails or saving state |
-| `python notify.py --company Amazon`                 | Monitor a specific company                             |
-| `python notify.py --discover`                       | Discover career portal metadata                        |
-| `python notify.py --refresh-discovery`              | Refresh cached metadata                                |
-| `python notify.py --probe Amazon`                   | Test live job fetching                                 |
-| `python notify.py --audit Amazon`                   | Show why each job was kept or filtered out             |
-| `python notify.py --bootstrap companies.csv`        | Generate company configurations from a CSV             |
-| `python notify.py --merge companies.generated.json` | Merge generated configurations into `companies.json`   |
-| `python notify.py --test-email`                     | Send a test email                                      |
+| Command | Description |
+|---|---|
+| `python notify.py` | Monitor all enabled companies |
+| `python notify.py --dry-run` | Preview changes without sending emails or saving state |
+| `python notify.py --company Amazon` | Monitor a specific company |
+| `python notify.py --discover` | Discover career portal metadata |
+| `python notify.py --refresh-discovery` | Refresh cached metadata |
+| `python notify.py --probe Amazon` | Test live job fetching |
+| `python notify.py --audit Amazon` | Show why each job was kept or filtered out |
+| `python notify.py --bootstrap companies.csv` | Generate company configurations from a CSV (optional LLM fallback) |
+| `python notify.py --merge companies.generated.json` | Merge generated configurations into `companies.json` |
+| `python notify.py --test-email` | Send a test email |
 
 Run `python notify.py --help` for all options.
 
@@ -171,7 +265,7 @@ FirstComeFirstEmploy runs once and exits, so schedule it with whatever you have.
 
 **cron (Linux / macOS):**
 
-```
+```cron
 */30 * * * * cd /path/to/FirstComeFirstEmploy && .venv/bin/python notify.py >> run.log 2>&1
 ```
 
@@ -179,18 +273,20 @@ On macOS you can use `launchd` instead, and on Windows, Task Scheduler. Note tha
 
 ## Data and state
 
-| Path             | Contents                                | In git? |
-|------------------|-----------------------------------------|---------|
-| `companies.json` | Company and search configuration        | yes     |
-| `.env`           | Email credentials                       | **no**  |
-| `discovery/`     | Cached career portal metadata           | no      |
-| `states/`        | Job snapshots used for change detection | no      |
+| Path | Contents | In git? |
+|---|---|---|
+| `companies.json` | Company and search configuration | yes |
+| `.env` | Email credentials and optional LLM API keys | **no** |
+| `companies.generated.json` | Newly verified bootstrap results (review before merging) | local output |
+| `companies.unresolved.csv` | Unresolved bootstrap results and LLM hints | local output |
+| `discovery/` | Cached career portal metadata | no |
+| `states/` | Job snapshots used for change detection | no |
 
 `discovery/` and `states/` are created on first run. Delete a company's file in `states/` to re-baseline it.
 
 ## How it works
 
-Each run:
+Each monitoring run:
 
 1. Loads configured companies and searches.
 2. Discovers the platform and required metadata (cached after the first time).
@@ -202,17 +298,17 @@ Each run:
 
 ### Project layout
 
-```
+```text
 FirstComeFirstEmploy/
 ├── notify.py                 # entry point
 ├── companies.json            # companies and searches
 ├── requirements.txt
-├── .env                      # generated / not in git
+├── .env                      # local / not in git
 ├── states/                   # generated / not in git
 ├── discovery/                # generated / not in git
 └── firstcomefirstemploy/
     ├── cli.py
-    ├── config.py
+    ├── config.py             # LLM provider keys and settings
     ├── presets.py
     ├── filters.py
     ├── companies.py
@@ -226,23 +322,23 @@ FirstComeFirstEmploy/
     │   └── atlassian.py, amazon.py, eightfold.py, google.py, oracle.py, linkedin.py
     ├── notifiers/
     │   └── email_notifier.py
-    ├── commands/
-    └── utils/
+    ├── commands/             # includes bootstrap.py
+    └── utils/                # includes llm.py (Anthropic / OpenAI / Gemini)
 ```
 
-| Component               | Responsibility                                              |
-|-------------------------|-------------------------------------------------------------|
-| `discovery.py`          | Career portal discovery and metadata caching                |
-| `fetcher.py`            | Job fetching orchestration                                  |
-| `filters.py`            | Search and job filtering                                    |
-| `presets.py`            | Default title-matching presets and country/location aliases |
-| `state.py`              | Change detection and snapshots                              |
-| `platforms/base.py`     | Common platform interface and shared functionality          |
-| `platforms/registry.py` | Platform registration and lookup                            |
-| `platforms/`            | ATS-specific integrations                                   |
-| `notifiers/`            | Email notifications                                         |
-| `commands/`             | CLI commands                                                |
-| `utils/`                | Shared utilities                                            |
+| Component | Responsibility |
+|---|---|
+| `discovery.py` | Career portal discovery and metadata caching |
+| `fetcher.py` | Job fetching orchestration |
+| `filters.py` | Search and job filtering |
+| `presets.py` | Default title-matching presets and country/location aliases |
+| `state.py` | Change detection and snapshots |
+| `platforms/base.py` | Common platform interface and shared functionality |
+| `platforms/registry.py` | Platform registration and lookup |
+| `platforms/` | ATS-specific integrations |
+| `notifiers/` | Email notifications |
+| `commands/bootstrap.py` | Bulk company discovery, verification, merge |
+| `utils/llm.py` | Optional LLM fallback using Anthropic, OpenAI or Gemini |
 
 ## Adding a new platform
 
@@ -283,20 +379,20 @@ class ExampleATS(Platform):
         return jobs, False
 ```
 
-| Member                                          | Purpose                                                                  |
-|-------------------------------------------------|--------------------------------------------------------------------------|
-| `name`                                          | Unique platform identifier, used in `companies.json`                     |
-| `detect(host, path)`                            | Returns `True` if a career URL belongs to this platform                  |
-| `discover(session, company)`                    | Returns platform metadata, cached in `discovery/`                        |
-| `cache_key(metadata, search)`                   | Identifies which searches can share one fetch (see below)                |
-| `per_job_descriptions`                          | Set to `True` if descriptions need one extra request per job             |
-| `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs; returns `(jobs, server_filtered)`           |
+| Member | Purpose |
+|---|---|
+| `name` | Unique platform identifier, used in `companies.json` |
+| `detect(host, path)` | Returns `True` if a career URL belongs to this platform |
+| `discover(session, company)` | Returns platform metadata, cached in `discovery/` |
+| `cache_key(metadata, search)` | Identifies which searches can share one fetch (see below) |
+| `per_job_descriptions` | Set to `True` if descriptions need one extra request per job |
+| `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs; returns `(jobs, server_filtered)` |
 
 Use an existing integration such as `greenhouse.py` or `amazon.py` as the reference for exact signatures and return format.
 
 **3. Test it.** The platform package imports new modules automatically and `@register` registers the class, so nothing needs to change in `registry.py`, `__init__.py`, `discovery.py` or `fetcher.py`.
 
-```
+```bash
 python notify.py --discover "Example Company"
 python notify.py --probe "Example Company"
 python notify.py --audit "Example Company"
@@ -336,7 +432,8 @@ Some portals only return descriptions on each job's own page. Set `per_job_descr
 
 - Relies on publicly accessible career endpoints, which companies can change without notice. When a portal breaks, `--probe` is the fastest way to see why.
 - Job data quality varies: some portals return incomplete descriptions or locations.
-- New platforms need a custom integration.
+- New platforms need a custom integration; an LLM suggestion cannot add an unsupported ATS automatically.
+- LLM-suggested URLs may be wrong or stale, and provider calls may incur API charges or hit quotas. A suggested URL must pass live verification before it is accepted.
 - Be a polite client: keep the schedule modest and do not hammer career sites. Check each site's terms of service before monitoring it. Automated access to some sites, LinkedIn in particular, may be restricted by their terms.
 
 ## License
