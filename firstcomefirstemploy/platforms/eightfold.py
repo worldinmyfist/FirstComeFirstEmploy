@@ -35,6 +35,9 @@ def _pick(source, *keys):
 @register
 class Eightfold(Platform):
     name = "eightfold"
+    bootstrap_names = ("microsoft", "microsoft india")
+    bootstrap_career_url = "https://apply.careers.microsoft.com/careers"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

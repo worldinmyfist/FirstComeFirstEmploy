@@ -104,6 +104,8 @@ def _job_url(tenant, obfuscated):
 @register
 class TurboHire(Platform):
     name = "turbohire"
+    bootstrap_url = "https://{slug}.turbohire.co"
+    bootstrap_order = 60
 
     def detect(self, host, path):
         return host.endswith(".turbohire.co")

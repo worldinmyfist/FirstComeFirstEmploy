@@ -48,6 +48,9 @@ def _location_matches_country(location, country):
 @register
 class Amazon(Platform):
     name = "amazon"
+    bootstrap_names = ("amazon", "amazon web services", "aws", "amazon india")
+    bootstrap_career_url = "https://www.amazon.jobs/en/search"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

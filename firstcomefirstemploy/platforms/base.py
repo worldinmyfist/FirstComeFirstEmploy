@@ -1,6 +1,7 @@
 """Base class every job-portal integration extends."""
 
 import threading
+import time
 from urllib.parse import urlparse
 
 from ..filters import (
@@ -8,6 +9,7 @@ from ..filters import (
     description_filters_requested,
     prefilter_signature,
 )
+from ..utils.text import normalize
 
 _RAW_CACHE = {}
 _RAW_CACHE_LOCK = threading.Lock()
@@ -51,6 +53,15 @@ class Platform:
     # e.g. "https://jobs.lever.co/{slug}" -> platform can be auto-found by
     # `--bootstrap`; leave None otherwise.
     bootstrap_url = None
+    # Probe order in `--bootstrap` (lower first). Expensive guessers go last.
+    bootstrap_order = 50
+    # Single-company portals (google, amazon...): normalized company names
+    # served by this platform + the career URL to configure for them.
+    bootstrap_names = ()
+    bootstrap_career_url = None
+    # False for portals where a live check means downloading a huge listing;
+    # a name match is then accepted without one.
+    bootstrap_validate = True
 
     # ---- hooks ------------------------------------------------
 
@@ -109,14 +120,31 @@ class Platform:
         )
         return dict(meta, total_postings=len(raw))
 
-    def probe(self, session, slug):
-        """Return {id: job} if a public board exists for `slug`, else None.
-        Used by `--bootstrap`; needs `bootstrap_url`."""
-        company = {
-            "name": slug,
-            "career_url": self.bootstrap_url.format(slug=slug),
-            "slug": slug,
-        }
+    # ---- --bootstrap hooks ------------------------------------
+
+    def known_board(self, name):
+        """Company dict if `name` is the company this portal is built for."""
+        if self.bootstrap_career_url and normalize(name) in self.bootstrap_names:
+            return {"career_url": self.bootstrap_career_url}
+
+        return None
+
+    def bootstrap_candidates(self, slugs):
+        """Company dicts to try for these guessed slugs (override to add
+        variants, e.g. Lever's EU host)."""
+        if not self.bootstrap_url:
+            return []
+
+        return [
+            {"slug": s, "career_url": self.bootstrap_url.format(slug=s)}
+            for s in slugs
+        ]
+
+    def probe_company(self, session, company):
+        """Return {id: job} if `company` (career_url/slug/...) is a live
+        public board on this platform, else None. Never raises."""
+        company = dict(company)
+        company.setdefault("name", company.get("slug") or company["career_url"])
 
         try:
             meta = dict(self.discover(session, company), platform=self.name)
@@ -125,3 +153,37 @@ class Platform:
             return None
 
         return raw or None
+
+    def verify(self, session, company):
+        """Board dict {platform, company, jobs, total} or None."""
+        if not self.bootstrap_validate:
+            return {"platform": self.name, "company": dict(company),
+                    "jobs": {}, "total": None, "live_checked": False}
+
+        jobs = self.probe_company(session, company)
+
+        if not jobs:
+            return None
+
+        return {"platform": self.name, "company": dict(company),
+                "jobs": jobs, "total": len(jobs), "live_checked": True}
+
+    def find_board(self, session, slugs, delay=0.0):
+        """Try this platform for the guessed slugs; first live board wins."""
+        for company in self.bootstrap_candidates(slugs):
+            board = self.verify(session, company)
+
+            if delay:
+                time.sleep(delay)
+
+            if board:
+                return board
+
+        return None
+
+    def probe(self, session, slug):
+        """Back-compat: {id: job} for a slug, else None."""
+        return self.probe_company(session, {
+            "slug": slug,
+            "career_url": self.bootstrap_url.format(slug=slug),
+        })

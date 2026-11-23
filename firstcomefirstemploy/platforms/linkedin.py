@@ -3,7 +3,7 @@
 import html
 import re
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 
 from ..config import MAX_PAGES, POLITE_DELAY
 from ..filters import primary_country
@@ -32,6 +32,16 @@ def _extract(card, pattern):
         return ""
 
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", match.group(1))).split())
+
+
+def _clean_url(u):
+    """Drop the query string and fragment (refId, trackingId, position, pageNum).
+
+    LinkedIn regenerates these on every request, which made unchanged jobs
+    look "modified" on each run.
+    """
+    p = urlsplit(u)
+    return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
 
 
 def _search_location(search):
@@ -119,7 +129,8 @@ class LinkedIn(Platform):
                         r'class="[^"]*job-search-card__location[^"]*"[^>]*>(.*?)</',
                     ),
                     "url": (
-                        html.unescape(url_match.group(1)) if url_match
+                        _clean_url(html.unescape(url_match.group(1)))
+                        if url_match
                         else f"https://www.linkedin.com/jobs/view/{jid}"
                     ),
                     "posted": "",

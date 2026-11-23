@@ -149,6 +149,9 @@ def _detail_description(session, url):
 @register
 class DEShaw(Platform):
     name = "deshaw"
+    bootstrap_names = ("d e shaw", "de shaw", "d e shaw india", "d e shaw group")
+    bootstrap_career_url = "https://www.deshawindia.com/careers"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

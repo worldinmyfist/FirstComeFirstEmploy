@@ -36,6 +36,7 @@ class SmartRecruiters(Platform):
     name = "smartrecruiters"
     per_job_descriptions = True
     bootstrap_url = "https://jobs.smartrecruiters.com/{slug}"
+    bootstrap_order = 40
 
     def detect(self, host, path):
         return host.endswith("smartrecruiters.com")

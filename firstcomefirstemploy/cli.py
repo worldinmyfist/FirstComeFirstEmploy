@@ -35,6 +35,8 @@ def build_parser():
 
     parser.add_argument("--bootstrap", metavar="CSV",
                         help="find public job boards for companies in a CSV")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="with --bootstrap: skip the LLM fallback")
     parser.add_argument("--merge", metavar="FILE",
                         help="merge a generated companies file into companies.json")
 
@@ -46,7 +48,7 @@ def main():
 
     try:
         if args.bootstrap:
-            return run_bootstrap(args.bootstrap)
+            return run_bootstrap(args.bootstrap, use_llm=not args.no_llm)
 
         if args.merge:
             return run_merge(args.merge)

@@ -12,6 +12,22 @@ from .registry import register
 class Lever(Platform):
     name = "lever"
     bootstrap_url = "https://jobs.lever.co/{slug}"
+    bootstrap_order = 20
+
+    def bootstrap_candidates(self, slugs):
+        # US first, then the EU region host, per slug.
+        candidates = []
+
+        for slug in slugs:
+            candidates.append({
+                "slug": slug, "career_url": f"https://jobs.lever.co/{slug}",
+            })
+            candidates.append({
+                "slug": slug, "career_url": f"https://jobs.eu.lever.co/{slug}",
+                "region": "eu",
+            })
+
+        return candidates
 
     def detect(self, host, path):
         return host.endswith("lever.co")

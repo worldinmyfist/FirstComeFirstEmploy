@@ -225,6 +225,9 @@ def _description(info):
 class Meta(Platform):
 
     name = "meta"
+    bootstrap_names = ("meta", "meta platforms", "facebook")
+    bootstrap_career_url = "https://www.metacareers.com/jobs"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

@@ -1,11 +1,18 @@
 """Workday (myworkdayjobs.com): server-side facets via the public CXS API."""
 
 import re
+import threading
+import time
 from urllib.parse import urljoin, urlparse
 
 import requests
 
-from ..config import PAGE_WORKERS
+from ..config import (
+    BOOTSTRAP_DEBUG,
+    BOOTSTRAP_PROBE_TIMEOUT,
+    PAGE_WORKERS,
+    WORKDAY_PODS,
+)
 from ..filters import (
     description_filters_requested,
     is_audit,
@@ -244,9 +251,158 @@ def _job_id(posting):
     return match.group(0).upper() if match else external
 
 
+
+# ------------------------------------------------------------
+# --bootstrap guessing (tenant x wdN pod x site)
+# ------------------------------------------------------------
+
+_CONTROL_TENANT = "zzqxnotarealtenant"
+# A tenant we expect to exist; used once to check that the gate can tell a
+# real tenant from a made-up one. If it moves, we merely fall back to the
+# slower blind search.
+_CALIBRATION = ("salesforce", 12)
+_BLIND_SITES = 6        # sites per pod when the gate cannot discriminate
+
+_GATE_LOCK = threading.Lock()
+_CONTROL = {}           # pod -> signature of an unknown tenant's answer
+_MODE = {}              # "selective" | "blind"
+
+
+def _site_guesses(slug):
+    cap = slug.capitalize()
+    guesses = [
+        "External", "External_Career_Site", "Careers", "careers",
+        "ExternalCareerSite", f"{slug.upper()}ExternalCareerSite",
+        f"{cap}ExternalCareerSite", "external_experienced", slug,
+        f"{slug}careers", f"{cap}_Careers", f"{cap}External", "external",
+        "jobs",
+    ]
+    return list(dict.fromkeys(guesses))
+
+
+def _cxs_post(session, pod, tenant, site):
+    url = f"https://{tenant}.wd{pod}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+
+    return session.post(
+        url,
+        json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
+        timeout=BOOTSTRAP_PROBE_TIMEOUT,
+    )
+
+
+def _cxs_total(session, pod, tenant, site):
+    """Postings total if tenant+site is a live Workday board, else None.
+    One request, short timeout, no retries (most guesses are misses)."""
+    try:
+        response = _cxs_post(session, pod, tenant, site)
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    if not isinstance(data, dict) or "total" not in data:
+        return None
+
+    return data["total"]
+
+
+def _signature(session, pod, tenant):
+    """How Workday answers for this tenant with a bogus site."""
+    site = "zz-probe-site"
+
+    try:
+        response = _cxs_post(session, pod, tenant, site)
+    except requests.RequestException as exc:
+        return ("ERR", type(exc).__name__)
+
+    body = (response.text or "")[:200]
+
+    for word in (tenant, site):
+        body = body.replace(word, "<x>")
+
+    return (response.status_code, body)
+
+
+def _control(session, pod):
+    with _GATE_LOCK:
+        known = _CONTROL.get(pod)
+
+    if known is None:
+        known = _signature(session, pod, _CONTROL_TENANT)
+
+        with _GATE_LOCK:
+            _CONTROL[pod] = known
+
+    return known
+
+
+def _pod_has_tenant(session, pod, tenant):
+    """True when `tenant` answers differently from a made-up tenant."""
+    return _signature(session, pod, tenant) != _control(session, pod)
+
+
+def _gate_mode(session):
+    """'selective' if the pod check separates a real tenant from a fake one
+    (calibrated on a known tenant), else 'blind'."""
+    with _GATE_LOCK:
+        mode = _MODE.get("value")
+
+    if mode is None:
+        tenant, pod = _CALIBRATION
+        mode = "selective" if _pod_has_tenant(session, pod, tenant) else "blind"
+
+        with _GATE_LOCK:
+            _MODE["value"] = mode
+
+    return mode
+
+
+def _reset_gate():
+    with _GATE_LOCK:
+        _CONTROL.clear()
+        _MODE.clear()
+
+
+def _sample_jobs(session, metadata):
+    """First listing page as {id: job}: enough to prove the board works and
+    to show region/title stats without paging through every posting."""
+    data = request_json(
+        session,
+        metadata["api_url"],
+        payload={
+            "appliedFacets": {}, "limit": PAGE_SIZE,
+            "offset": 0, "searchText": "",
+        },
+    )
+
+    jobs = {}
+
+    for posting in data.get("jobPostings") or []:
+        jid = _job_id(posting)
+
+        if not jid:
+            continue
+
+        jobs[jid] = {
+            "title": (posting.get("title") or "").strip(),
+            "location": posting.get("locationsText", ""),
+            "url": urljoin(
+                metadata["job_base_url"] + "/",
+                (posting.get("externalPath") or "").lstrip("/"),
+            ),
+            "posted": posting.get("postedOn", ""),
+        }
+
+    return jobs
+
+
 @register
 class Workday(Platform):
     name = "workday"
+    bootstrap_order = 90  # many requests per guess: after the cheap platforms
 
     def detect(self, host, path):
         return host.endswith("myworkdayjobs.com")
@@ -308,6 +464,80 @@ class Workday(Platform):
             "total_postings": data.get("total", 0),
             "facets": facets,
         }
+
+    # ---- --bootstrap -------------------------------------------
+
+    def probe_company(self, session, company):
+        board = self.verify(session, company)
+        return board["jobs"] if board else None
+
+    def verify(self, session, company):
+        """Works for a full Workday URL (guessed or given by an LLM)."""
+        try:
+            meta = self.discover(session, dict(company))
+            jobs = _sample_jobs(session, meta)
+        except Exception:
+            return None
+
+        if not jobs:
+            return None
+
+        return {
+            "platform": self.name,
+            "company": dict(company),
+            "jobs": jobs,
+            "total": meta.get("total_postings") or len(jobs),
+            "live_checked": True,
+            "sampled": True,
+        }
+
+    def find_board(self, session, slugs, delay=0.0):
+        """Guess tenant (= slug), then wdN pod, then site; every hit is
+        confirmed by the real CXS API before it is returned."""
+        for slug in slugs:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+                continue
+
+            mode = _gate_mode(session)
+
+            if mode == "selective":
+                flags = map_concurrent(
+                    lambda n: _pod_has_tenant(session, n, slug),
+                    WORKDAY_PODS, workers=5,
+                )
+                pods = [n for n, ok in zip(WORKDAY_PODS, flags) if ok]
+                sites = _site_guesses(slug)
+            else:
+                pods = list(WORKDAY_PODS)
+                sites = _site_guesses(slug)[:_BLIND_SITES]
+
+            if BOOTSTRAP_DEBUG:
+                print(f"  [workday] {slug}: mode={mode} pods={pods}")
+
+            tasks = [(n, site) for n in pods for site in sites]
+            totals = map_concurrent(
+                lambda t: _cxs_total(session, t[0], slug, t[1]),
+                tasks, workers=6,
+            )
+
+            for (pod, site), total in zip(tasks, totals):
+                if total is None:
+                    continue
+
+                company = {
+                    "career_url": f"https://{slug}.wd{pod}.myworkdayjobs.com/{site}",
+                    "tenant": slug,
+                    "site": site,
+                }
+                board = self.verify(session, company)
+
+                if delay:
+                    time.sleep(delay)
+
+                if board:
+                    return board
+
+        return None
 
     def describe(self, metadata):
         print("Tenant:", metadata["tenant"])

@@ -21,6 +21,7 @@ def _job(posting, **extra):
 class Greenhouse(Platform):
     name = "greenhouse"
     bootstrap_url = "https://boards.greenhouse.io/{slug}"
+    bootstrap_order = 10
 
     def detect(self, host, path):
         return "greenhouse.io" in host or (
@@ -67,6 +68,9 @@ class Greenhouse(Platform):
             )
 
         return jobs, False
+
+    def probe_company(self, session, company):
+        return self.probe(session, company["slug"])
 
     def probe(self, session, slug):
         # Cheap listing (no job content) is enough to confirm a board.

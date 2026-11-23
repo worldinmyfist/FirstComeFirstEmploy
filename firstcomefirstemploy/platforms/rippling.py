@@ -81,6 +81,7 @@ class Rippling(Platform):
     name = "rippling"
     per_job_descriptions = True
     bootstrap_url = HOST + "/{slug}/jobs"
+    bootstrap_order = 45
 
     def detect(self, host, path):
         return host == "ats.rippling.com"

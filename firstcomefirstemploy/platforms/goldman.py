@@ -264,6 +264,9 @@ def _detail_description(session, jid, title=""):
 class Goldman(Platform):
 
     name = "goldman"
+    bootstrap_names = ("goldman sachs", "goldman sachs india")
+    bootstrap_career_url = "https://higher.gs.com/results"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

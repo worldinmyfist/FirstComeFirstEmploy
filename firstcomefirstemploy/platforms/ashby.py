@@ -10,6 +10,7 @@ from .registry import register
 class Ashby(Platform):
     name = "ashby"
     bootstrap_url = "https://jobs.ashbyhq.com/{slug}"
+    bootstrap_order = 30
 
     def detect(self, host, path):
         return host.endswith("ashbyhq.com")

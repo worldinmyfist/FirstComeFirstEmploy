@@ -174,6 +174,9 @@ def extract_google_description(session, url):
 class Google(Platform):
 
     name = "google"
+    bootstrap_names = ("google", "alphabet", "google india")
+    bootstrap_career_url = "https://www.google.com/about/careers/applications/jobs/results/"
+    bootstrap_validate = False  # single-company portal; listing is huge
     per_job_descriptions = True
 
     def detect(self, host, path):

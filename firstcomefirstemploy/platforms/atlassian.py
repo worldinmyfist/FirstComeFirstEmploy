@@ -9,6 +9,9 @@ from .registry import register
 @register
 class Atlassian(Platform):
     name = "atlassian"
+    bootstrap_names = ("atlassian",)
+    bootstrap_career_url = "https://www.atlassian.com/company/careers/all-jobs"
+    bootstrap_validate = False  # single-company portal; listing is huge
 
     def detect(self, host, path):
         return host.endswith("atlassian.com")
