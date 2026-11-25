@@ -1,6 +1,6 @@
 # FirstComeFirstEmploy
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/worldinmyfist/FirstComeFirstEmploy/blob/main/LICENSE) [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/worldinmyfist/FirstComeFirstEmploy/blob/main/LICENSE) [![Python](https://img.shields.io/badge/python-3.14-blue.svg)](https://img.shields.io/badge/python-3.14-blue.svg)
 
 **A job alert bot that watches company career pages and emails you the moment a matching role is added, removed, or changed.**
 
@@ -11,6 +11,7 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 - [Quickstart](#quickstart)
 - [Email setup](#email-setup)
 - [Configuration](#configuration)
+- [Customizing presets](#customizing-presets)
 - [Adding a company](#adding-a-company)
 - [Bulk company bootstrap and LLM fallback](#bulk-company-bootstrap-and-llm-fallback)
 - [Usage](#usage)
@@ -33,12 +34,15 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 
 ## Quickstart
 
+**Python 3.14 is required. This release was built using Python 3.14.8.**
+
+Use the same release on macOS, Linux or Windows with Python 3.14.
+
 ```bash
 # 1. Install
-# Download and extract the portable ZIP matching your CPython major/minor version.
-# The same ZIP works across operating systems and CPU architectures with compatible CPython.
+git clone https://github.com/worldinmyfist/FirstComeFirstEmploy.git
 cd FirstComeFirstEmploy
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -57,7 +61,7 @@ python notify.py
 
 The first successful run for a company establishes a **baseline** and sends no alerts for jobs that already exist. You are only notified about changes after that.
 
-> Portable releases contain obfuscated `.pyc` files and require the CPython major/minor version in the filename (e.g. `cp313` = CPython 3.13). No C compiler or Cython is required. Use the same ZIP on macOS, Linux or Windows with compatible CPython bytecode. On Windows, activate the virtual environment with `.venv\Scripts\Activate.ps1`. Bytecode and obfuscation deter casual copying but can be reverse engineered.
+On Windows, use `py -3.14 -m venv .venv` to create the environment and `.venv\Scripts\Activate.ps1` to activate it in PowerShell.
 
 ## Email setup
 
@@ -82,22 +86,25 @@ python notify.py --test-email
 
 ## Configuration
 
-Companies and searches live in `companies.json`. Each company has a platform and one or more searches:
+Companies and searches live in `companies.json`. Each company has a platform and one or more searches. The file contains a top-level `companies` array:
 
 ```json
 {
-  "name": "Example Company",
-  "career_url": "https://boards.greenhouse.io/example",
-  "platform": "greenhouse",
-  "enabled": true,
-  "searches": [
+  "companies": [
     {
-      "name": "India AI Roles",
-      "location": "India",
-      "title_any": ["Software Engineer", "Machine Learning Engineer", "Quant Researcher"],
-      "title_exclude": ["Intern", "Senior Manager"],
-      "description_any": ["Python", "C++", "Machine Learning"],
-      "description_exclude": ["Sales", "Recruitment"]
+      "name": "Example Company",
+      "career_url": "https://boards.greenhouse.io/example",
+      "platform": "greenhouse",
+      "enabled": true,
+      "searches": [
+        {
+          "name": "India AI Roles",
+          "country": ["india"],
+          "title_preset": "tech_roles",
+          "title_exclude": ["Senior Manager"],
+          "description_exclude": ["Recruitment"]
+        }
+      ]
     }
   ]
 }
@@ -107,15 +114,118 @@ Companies and searches live in `companies.json`. Each company has a platform and
 
 | Field | Purpose |
 |---|---|
-| `location` | Keep only jobs in this location (country/city aliases supported) |
+| `country` | Country or list of countries to match using location aliases |
+| `title_preset` | Optional reusable title rules from `TITLE_PRESETS` |
 | `title_any` | Keep jobs whose title matches **any** of these keywords |
 | `title_exclude` | Drop jobs whose title matches **any** of these keywords |
-| `description_any` | Keep jobs whose description matches **any** of these keywords |
+| `search_text` | Require all keyword words in the combined title and description |
+| `job_family` | Match a job family term in the title |
 | `description_exclude` | Drop jobs whose description matches **any** of these keywords |
 
 Reusable title presets and location aliases are defined in `firstcomefirstemploy/presets.py`. Put company-specific keywords in `companies.json`.
 
-Not every portal exposes job descriptions. Where a platform returns none, description filters cannot match, so check with `--audit` before relying on them.
+Not every portal exposes job descriptions. A missing description does not by itself reject a job under `description_exclude`; use `--audit` to inspect availability and filtering.
+
+## Customizing presets
+
+Edit [`firstcomefirstemploy/presets.py`](firstcomefirstemploy/presets.py) to customize reusable search rules and company discovery. Changes take effect on the next run.
+
+| Setting | Purpose |
+|---|---|
+| `TITLE_PRESETS` | Reusable title inclusion and exclusion rules |
+| `COUNTRY_ALIASES` | Location aliases used to filter returned jobs |
+| `BOOTSTRAP_COUNTRY_ALIASES` | Maps CSV locations to countries during bootstrap |
+| `BOOTSTRAP_DEFAULT_COUNTRIES` | Fallback countries for blank or unrecognized CSV locations |
+| `KNOWN_BOARDS` | Known company-to-platform and board identifier mappings |
+| `SKIP_NAMES` | Company names ignored during bootstrap |
+| `BOOTSTRAP_NOISE_WORDS` | Words removed when generating candidate board identifiers |
+| `MIN_CONFIDENT_JOBS` | Confidence threshold for small career boards |
+| `PLATFORM_URL_HINTS` | Career URL patterns used for optional LLM-assisted discovery |
+
+### Title presets
+
+The existing `tech_roles` preset includes software engineering, AI/ML, data science and quantitative roles, with exclusion rules for unwanted titles. Review these rules to suit your preferences.
+
+Add a new preset after the existing dictionary:
+
+```python
+TITLE_PRESETS["finance_roles"] = {
+    "any": ["financial analyst", "investment analyst", "portfolio analyst"],
+    "exclude": ["intern", "internship", "manager"],
+}
+```
+
+Select it in a search in `companies.json`:
+
+```json
+{
+  "name": "Finance Roles",
+  "country": ["india"],
+  "title_preset": "finance_roles"
+}
+```
+
+Matching uses normalized, case-insensitive whole words and phrases. The `any` list requires at least one match when nonempty; any matching exclusion rejects the title. Search-specific `title_any` and `title_exclude` are combined with the preset lists. If `title_preset` is omitted, no preset is applied. Newly bootstrapped searches use `tech_roles` by default; edit the generated searches if you prefer another preset or none.
+
+### Job locations and bootstrap countries
+
+`COUNTRY_ALIASES` matches locations returned by career sites. For instance, expand the existing India aliases:
+
+```python
+COUNTRY_ALIASES["india"].extend(["mumbai", "pune", "chennai", "delhi"])
+```
+
+`BOOTSTRAP_COUNTRY_ALIASES` interprets the location column in your bootstrap CSV. India, Singapore, United Kingdom, Remote, United States, Canada, Australia and Germany are recognized by default.
+
+To add another country, append entries to both dictionaries:
+
+```python
+BOOTSTRAP_COUNTRY_ALIASES["new zealand"] = {"nz", "auckland", "wellington"}
+COUNTRY_ALIASES["new zealand"] = ["new zealand", "auckland", "wellington"]
+```
+
+Use lowercase canonical country keys. Bootstrap matches whole normalized words and phrases, recognizes the country key itself, and returns all matched countries in dictionary order without duplicates. A CSV location such as `India / Singapore` can select both countries.
+
+The default fallback is:
+
+```python
+BOOTSTRAP_DEFAULT_COUNTRIES = ("india",)
+```
+
+Change it to suit your preferences, for example:
+
+```python
+BOOTSTRAP_DEFAULT_COUNTRIES = ("united states", "canada")
+```
+
+Recognized CSV locations take precedence over fallback countries. Some platform APIs have their own geographic constraints or query only the first country; configure separate searches when necessary. Adding aliases does not add new ATS integrations or guarantee access to country-specific boards.
+
+### Company discovery settings
+
+```python
+# Known platform and board identifier for a company
+KNOWN_BOARDS["example company"] = ("greenhouse", "examplecompany")
+
+# Ignore a company during bootstrap
+SKIP_NAMES.add("example company to skip")
+
+# Additional words to omit when generating candidate board identifiers
+BOOTSTRAP_NOISE_WORDS.update({"limited", "corporation", "holdings"})
+```
+
+`MIN_CONFIDENT_JOBS` defaults to `5`. Lowering it may help discover small boards but can increase ambiguous matches. Review generated configurations before merging them.
+
+For a custom platform integration, add its career URL pattern if you want it included in LLM-assisted discovery:
+
+```python
+PLATFORM_URL_HINTS["example_ats"] = "https://jobs.example-ats.com/<slug>"
+```
+
+A working platform integration is still required to verify suggested URLs.
+
+### Runtime settings
+
+See [`firstcomefirstemploy/config.py`](firstcomefirstemploy/config.py) for request timeouts, retries, concurrency and LLM settings. Keep credentials and API keys in `.env`.
 
 ## Adding a company
 
@@ -168,16 +278,7 @@ Bootstrap tries known boards and company-specific portals, then slug-based ATS p
 
 ### Configure bootstrap countries
 
-Edit `firstcomefirstemploy/presets.py` (no rebuild required). `BOOTSTRAP_COUNTRY_ALIASES` maps CSV location words and phrases to generated search countries. `COUNTRY_ALIASES` independently controls matching against returned job locations. India, Singapore, United Kingdom, Remote, United States, Canada, Australia and Germany are recognized by default. To add another country, insert entries in the existing dictionaries, or append these lines after their definitions:
-
-```python
-BOOTSTRAP_COUNTRY_ALIASES["new zealand"] = {"nz", "auckland", "wellington"}
-COUNTRY_ALIASES["new zealand"] = ["new zealand", "auckland", "wellington"]
-# Optional: change the fallback for blank or unrecognized CSV locations.
-BOOTSTRAP_DEFAULT_COUNTRIES = ("new zealand",)
-```
-
-Use lowercase canonical country keys. Bootstrap matches whole normalized words and contiguous phrases, includes the country name itself automatically, and returns all matched countries in dictionary order without duplicates. Blank or unrecognized input uses `BOOTSTRAP_DEFAULT_COUNTRIES` (India by default). Some platform APIs have their own location constraints or query only the first country; configure separate searches if necessary. Adding aliases does not create new ATS integrations or guarantee access to country-specific job boards.
+See [Customizing presets](#customizing-presets) for country aliases and fallback countries.
 
 ### Optional LLM providers: Gemini, OpenAI, Anthropic
 
@@ -317,37 +418,35 @@ FirstComeFirstEmploy/
 ├── notify.py
 ├── companies.json
 ├── requirements.txt
-├── .env                      # local / not in git
+├── README.md
 └── firstcomefirstemploy/
-    ├── config.py             # editable settings
-    ├── presets.py            # editable filtering and bootstrap data
-    ├── cli.pyc
+    ├── config.py
+    ├── presets.py
     ├── platforms/
-    │   ├── __init__.py        # automatic discovery
-    │   ├── base.py            # platform interface
-    │   ├── registry.py        # registration
-    │   ├── ashby.py           # example
-    │   ├── lever.py           # example
-    │   ├── workday.pyc
-    │   └── ...                # built-in bytecode modules and custom .py files
-    ├── commands/              # bytecode modules
-    ├── utils/                 # bytecode modules
-    └── notifiers/             # bytecode modules
+    │   ├── __init__.py
+    │   ├── base.py
+    │   ├── registry.py
+    │   ├── ashby.py
+    │   ├── lever.py
+    │   └── ...
+    ├── commands/
+    ├── utils/
+    └── notifiers/
 ```
 
 | Component | Responsibility |
 |---|---|
-| `discovery.py` | Career portal discovery and metadata caching |
-| `fetcher.py` | Job fetching orchestration |
-| `filters.py` | Search and job filtering |
-| `presets.py` | Default title-matching presets and country/location aliases |
-| `state.py` | Change detection and snapshots |
-| `platforms/base.py` | Common platform interface and shared functionality |
+| `notify.py` | Application entry point |
+| `companies.json` | Companies and search preferences |
+| `config.py` | Runtime settings |
+| `presets.py` | Matching and discovery preferences |
+| `platforms/base.py` | Common platform interface |
 | `platforms/registry.py` | Platform registration and lookup |
-| `platforms/` | ATS-specific integrations |
-| `notifiers/` | Email notifications |
-| `commands/bootstrap.py` | Bulk company discovery, verification, merge |
-| `utils/llm.py` | Optional LLM fallback using Anthropic, OpenAI or Gemini |
+| `platforms/ashby.py`, `platforms/lever.py` | Reference integrations |
+| `platforms/` | Career platform integrations |
+| `commands/` | CLI commands |
+| `utils/` | Shared utilities |
+| `notifiers/` | Notification services |
 
 ## Adding a new platform
 
@@ -397,9 +496,9 @@ class ExampleATS(Platform):
 | `per_job_descriptions` | Set to `True` if descriptions need one extra request per job |
 | `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs; returns `(jobs, server_filtered)` |
 
-Use the exposed `ashby.py` and `lever.py` integrations as references for exact signatures and return format. Choose a unique filename and platform `name` to avoid replacing a built-in integration. For bootstrap support, set `bootstrap_url` and optionally `bootstrap_order`, or override the bootstrap hooks in `base.py`. For LLM-assisted discovery, add the platform URL shape to `PLATFORM_URL_HINTS` in `presets.py`. The compiled `utils.http`, `utils.text` and `filters` modules remain importable from your Python adapter.
+Use the `ashby.py` and `lever.py` integrations as references for exact signatures and return format. Choose a unique filename and platform `name` to avoid replacing a built-in integration. For bootstrap support, set `bootstrap_url` and optionally `bootstrap_order`, or override the bootstrap hooks in `base.py`. For LLM-assisted discovery, add the platform URL shape to `PLATFORM_URL_HINTS` in `presets.py`. The `utils.http`, `utils.text` and `filters` modules remain importable from your Python adapter.
 
-**3. Test it.** The platform package imports new modules automatically and `@register` registers the class, so nothing needs to change in `registry.py`, `__init__.py`, `discovery.py` or `fetcher.py`.
+**3. Test it.** The platform package imports new modules automatically and `@register` registers the class, so nothing needs to change in the registry or other application modules.
 
 ```bash
 python notify.py --discover "Example Company"
@@ -407,7 +506,7 @@ python notify.py --probe "Example Company"
 python notify.py --audit "Example Company"
 ```
 
-Before enabling regular monitoring, verify job counts, pagination, locations, application URLs and filtering. Custom platform files can be shared independently without sharing the private source.
+Before enabling regular monitoring, verify job counts, pagination, locations, application URLs and filtering.
 
 ## Fetch caching and `cache_key`
 
@@ -444,10 +543,6 @@ Some portals only return descriptions on each job's own page. Set `per_job_descr
 - New platforms need a custom integration; an LLM suggestion cannot add an unsupported ATS automatically.
 - LLM-suggested URLs may be wrong or stale, and provider calls may incur API charges or hit quotas. A suggested URL must pass live verification before it is accepted.
 - Be a polite client: keep the schedule modest and do not hammer career sites. Check each site's terms of service before monitoring it. Automated access to some sites, LinkedIn in particular, may be restricted by their terms.
-
-## Editable settings
-
-Edit `config.py` for runtime tuning and `presets.py` for title/country rules, bootstrap aliases, known board mappings, ignored companies, confidence threshold and LLM URL hints. Changes take effect on the next invocation. Keep secrets in `.env`. Obfuscated bytecode is not encrypted and can be reverse engineered.
 
 ## License
 
