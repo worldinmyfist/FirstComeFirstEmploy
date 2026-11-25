@@ -76,7 +76,7 @@ SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=465
 ```
 
-For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833) rather than your account password. App Passwords require 2-Step Verification to be enabled. Never commit `.env`; make sure it is listed in `.gitignore`.
+For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833) rather than your account password. App Passwords require 2-Step Verification to be enabled.
 
 Verify delivery with:
 
