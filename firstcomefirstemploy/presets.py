@@ -49,4 +49,53 @@ COUNTRY_ALIASES = {
     ],
     "australia": ["australia", "sydney", "melbourne", "brisbane", "perth"],
     "singapore": ["singapore"],
+    "germany": ["germany", "berlin", "munich", "frankfurt", "hamburg"],
 }
+
+# Bootstrap configuration
+# normalized company name -> (platform, slug)
+KNOWN_BOARDS = {
+    "glean": ("greenhouse", "gleanwork"),
+    "razorpay": ("greenhouse", "razorpaysoftwareprivatelimited"),
+    "mistral ai": ("lever", "mistral"),
+    "openai": ("ashby", "openai"),
+    "anthropic": ("greenhouse", "anthropic"),
+    "databricks": ("greenhouse", "databricks"),
+    "elevenlabs": ("ashby", "elevenlabs"),
+    "cohere": ("ashby", "cohere"),
+    "stripe": ("greenhouse", "stripe"),
+}
+
+SKIP_NAMES = {"stealth co"}
+
+BOOTSTRAP_NOISE_WORDS = {"ai", "labs", "capital", "technologies", "inc", "hq"}
+
+# CSV location aliases, in priority order. Add countries here as needed.
+BOOTSTRAP_COUNTRY_ALIASES = {
+    "india": {"blr", "hyd", "india", "bangalore", "bengaluru", "hyderabad", "pune", "mumbai", "delhi", "noida"},
+    "singapore": {"sgp", "singapore"},
+    "united kingdom": {"london", "uk", "united kingdom", "u.k."},
+    "remote": {"remote"},
+    "united states": {"usa", "us", "u.s.", "united states", "new york", "san francisco", "seattle"},
+    "canada": {"canada", "toronto", "vancouver", "montreal", "ottawa"},
+    "australia": {"australia", "sydney", "melbourne", "brisbane", "perth"},
+    "germany": {"germany", "berlin", "munich", "frankfurt", "hamburg"},
+}
+BOOTSTRAP_DEFAULT_COUNTRIES = ("india",)
+
+# A board this small is probably another company's (or a stub).
+MIN_CONFIDENT_JOBS = 5
+
+# What the model should return for platforms we can scrape.
+PLATFORM_URL_HINTS = {
+    "greenhouse": "https://boards.greenhouse.io/<slug>",
+    "lever": "https://jobs.lever.co/<slug> (EU: https://jobs.eu.lever.co/<slug>)",
+    "ashby": "https://jobs.ashbyhq.com/<slug>",
+    "smartrecruiters": "https://jobs.smartrecruiters.com/<slug>",
+    "rippling": "https://ats.rippling.com/<slug>/jobs",
+    "turbohire": "https://<tenant>.turbohire.co",
+    "workday": "https://<tenant>.wd<N>.myworkdayjobs.com/<site>",
+    "oracle": "https://<host>.oraclecloud.com/hcmUI/CandidateExperience/<lang>/sites/<site>",
+    "eightfold": "https://<company>.eightfold.ai/careers",
+}
+

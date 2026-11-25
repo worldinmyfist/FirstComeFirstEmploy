@@ -35,7 +35,8 @@ Stop refreshing a dozen career portals. Point FirstComeFirstEmploy at the compan
 
 ```bash
 # 1. Install
-git clone https://github.com/worldinmyfist/FirstComeFirstEmploy.git
+# Download and extract the portable ZIP matching your CPython major/minor version.
+# The same ZIP works across operating systems and CPU architectures with compatible CPython.
 cd FirstComeFirstEmploy
 python3 -m venv .venv
 source .venv/bin/activate
@@ -56,7 +57,7 @@ python notify.py
 
 The first successful run for a company establishes a **baseline** and sends no alerts for jobs that already exist. You are only notified about changes after that.
 
-> Requires Python 3.9 or newer.
+> Portable releases contain obfuscated `.pyc` files and require the CPython major/minor version in the filename (e.g. `cp313` = CPython 3.13). No C compiler or Cython is required. Use the same ZIP on macOS, Linux or Windows with compatible CPython bytecode. On Windows, activate the virtual environment with `.venv\Scripts\Activate.ps1`. Bytecode and obfuscation deter casual copying but can be reverse engineered.
 
 ## Email setup
 
@@ -164,6 +165,19 @@ python notify.py --bootstrap companies.csv
 ```
 
 Bootstrap tries known boards and company-specific portals, then slug-based ATS probes, then Workday tenant/site guesses, and finally an optional LLM hint. It will **verify the suggested URL with a supported platform integration before accepting it**. Unsupported, invalid or empty boards remain unresolved.
+
+### Configure bootstrap countries
+
+Edit `firstcomefirstemploy/presets.py` (no rebuild required). `BOOTSTRAP_COUNTRY_ALIASES` maps CSV location words and phrases to generated search countries. `COUNTRY_ALIASES` independently controls matching against returned job locations. India, Singapore, United Kingdom, Remote, United States, Canada, Australia and Germany are recognized by default. To add another country, insert entries in the existing dictionaries, or append these lines after their definitions:
+
+```python
+BOOTSTRAP_COUNTRY_ALIASES["new zealand"] = {"nz", "auckland", "wellington"}
+COUNTRY_ALIASES["new zealand"] = ["new zealand", "auckland", "wellington"]
+# Optional: change the fallback for blank or unrecognized CSV locations.
+BOOTSTRAP_DEFAULT_COUNTRIES = ("new zealand",)
+```
+
+Use lowercase canonical country keys. Bootstrap matches whole normalized words and contiguous phrases, includes the country name itself automatically, and returns all matched countries in dictionary order without duplicates. Blank or unrecognized input uses `BOOTSTRAP_DEFAULT_COUNTRIES` (India by default). Some platform APIs have their own location constraints or query only the first country; configure separate searches if necessary. Adding aliases does not create new ATS integrations or guarantee access to country-specific job boards.
 
 ### Optional LLM providers: Gemini, OpenAI, Anthropic
 
@@ -300,30 +314,25 @@ Each monitoring run:
 
 ```text
 FirstComeFirstEmploy/
-├── notify.py                 # entry point
-├── companies.json            # companies and searches
+├── notify.py
+├── companies.json
 ├── requirements.txt
 ├── .env                      # local / not in git
-├── states/                   # generated / not in git
-├── discovery/                # generated / not in git
 └── firstcomefirstemploy/
-    ├── cli.py
-    ├── config.py             # LLM provider keys and settings
-    ├── presets.py
-    ├── filters.py
-    ├── companies.py
-    ├── discovery.py
-    ├── fetcher.py
-    ├── state.py
-    ├── platforms/            # one module per ATS / career site
-    │   ├── base.py
-    │   ├── registry.py
-    │   ├── workday.py, greenhouse.py, lever.py, ashby.py, smartrecruiters.py
-    │   └── atlassian.py, amazon.py, eightfold.py, google.py, oracle.py, linkedin.py
-    ├── notifiers/
-    │   └── email_notifier.py
-    ├── commands/             # includes bootstrap.py
-    └── utils/                # includes llm.py (Anthropic / OpenAI / Gemini)
+    ├── config.py             # editable settings
+    ├── presets.py            # editable filtering and bootstrap data
+    ├── cli.pyc
+    ├── platforms/
+    │   ├── __init__.py        # automatic discovery
+    │   ├── base.py            # platform interface
+    │   ├── registry.py        # registration
+    │   ├── ashby.py           # example
+    │   ├── lever.py           # example
+    │   ├── workday.pyc
+    │   └── ...                # built-in bytecode modules and custom .py files
+    ├── commands/              # bytecode modules
+    ├── utils/                 # bytecode modules
+    └── notifiers/             # bytecode modules
 ```
 
 | Component | Responsibility |
@@ -388,7 +397,7 @@ class ExampleATS(Platform):
 | `per_job_descriptions` | Set to `True` if descriptions need one extra request per job |
 | `fetch_raw(session, company, metadata, search)` | Fetches and normalizes jobs; returns `(jobs, server_filtered)` |
 
-Use an existing integration such as `greenhouse.py` or `amazon.py` as the reference for exact signatures and return format.
+Use the exposed `ashby.py` and `lever.py` integrations as references for exact signatures and return format. Choose a unique filename and platform `name` to avoid replacing a built-in integration. For bootstrap support, set `bootstrap_url` and optionally `bootstrap_order`, or override the bootstrap hooks in `base.py`. For LLM-assisted discovery, add the platform URL shape to `PLATFORM_URL_HINTS` in `presets.py`. The compiled `utils.http`, `utils.text` and `filters` modules remain importable from your Python adapter.
 
 **3. Test it.** The platform package imports new modules automatically and `@register` registers the class, so nothing needs to change in `registry.py`, `__init__.py`, `discovery.py` or `fetcher.py`.
 
@@ -398,7 +407,7 @@ python notify.py --probe "Example Company"
 python notify.py --audit "Example Company"
 ```
 
-Before enabling regular monitoring, verify job counts, pagination, locations, application URLs and filtering. Pull requests with new platform integrations are welcome.
+Before enabling regular monitoring, verify job counts, pagination, locations, application URLs and filtering. Custom platform files can be shared independently without sharing the private source.
 
 ## Fetch caching and `cache_key`
 
@@ -435,6 +444,10 @@ Some portals only return descriptions on each job's own page. Set `per_job_descr
 - New platforms need a custom integration; an LLM suggestion cannot add an unsupported ATS automatically.
 - LLM-suggested URLs may be wrong or stale, and provider calls may incur API charges or hit quotas. A suggested URL must pass live verification before it is accepted.
 - Be a polite client: keep the schedule modest and do not hammer career sites. Check each site's terms of service before monitoring it. Automated access to some sites, LinkedIn in particular, may be restricted by their terms.
+
+## Editable settings
+
+Edit `config.py` for runtime tuning and `presets.py` for title/country rules, bootstrap aliases, known board mappings, ignored companies, confidence threshold and LLM URL hints. Changes take effect on the next invocation. Keep secrets in `.env`. Obfuscated bytecode is not encrypted and can be reverse engineered.
 
 ## License
 
